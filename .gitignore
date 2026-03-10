@@ -140,3 +140,9 @@ dist
 .pnp.*
 
 .vercel
+
+# Generated pipeline artifacts (local runtime outputs)
+/artifacts/**/*.json
+
+# Generated fixture snapshots
+/tests/fixtures/**/*.json

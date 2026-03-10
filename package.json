@@ -20,7 +20,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "serve": "vite preview"
+    "serve": "vite preview",
+    "api": "tsx scripts/start-api.ts",
+    "api:test": "bash scripts/test-api-curl.sh",
+    "test": "tsx scripts/run-regression-tests.ts"
   },
   "eslintConfig": {
     "extends": [
@@ -49,6 +52,7 @@
     "@vitejs/plugin-react": "^5.1.4",
     "autoprefixer": "^10.4.27",
     "postcss": "^8.5.6",
+    "tsx": "^4.20.6",
     "vite": "^7.3.1",
     "vite-plugin-node-polyfills": "^0.25.0"
   }
