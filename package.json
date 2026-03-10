@@ -1,0 +1,55 @@
+{
+  "name": "ln-advisor",
+  "version": "0.0.1",
+  "private": true,
+  "dependencies": {
+    "@heroicons/react": "^2.2.0",
+    "@lightninglabs/lnc-web": "0.3.5-alpha",
+    "@tailwindcss/vite": "^4.2.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "buffer": "^6.0.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-router-dom": "^7.13.1",
+    "recharts": "^3.7.0",
+    "tailwindcss": "^4.2.1",
+    "web-vitals": "5.1.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "browser": {
+    "fs": false,
+    "path": false,
+    "os": false
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.4",
+    "autoprefixer": "^10.4.27",
+    "postcss": "^8.5.6",
+    "vite": "^7.3.1",
+    "vite-plugin-node-polyfills": "^0.25.0"
+  }
+}
