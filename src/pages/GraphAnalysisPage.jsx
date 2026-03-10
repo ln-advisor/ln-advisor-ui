@@ -125,6 +125,9 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [graph, setGraph] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [forwardingEvents, setForwardingEvents] = useState([]);
+    const [forwardingError, setForwardingError] = useState(null);
+    const [rangeDays, setRangeDays] = useState(7);
     const [includeUnannounced, setIncludeUnannounced] = useState(false);
     const [includeAuthProof, setIncludeAuthProof] = useState(false);
     const [nodeQuery, setNodeQuery] = useState('');
@@ -134,31 +137,71 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [showLabels, setShowLabels] = useState(true);
     const [focusNode, setFocusNode] = useState('');
 
-    const fetchGraph = useCallback(async () => {
+    const fetchGraphData = useCallback(async () => {
         if (!lnc?.lnd?.lightning) {
             setError('Lightning service not available on this LNC session.');
-            return;
+            return null;
         }
         if (typeof lnc.lnd.lightning.describeGraph !== 'function') {
             setError('describeGraph is not available. Ensure LNC permissions include lightning RPC: DescribeGraph.');
-            return;
+            return null;
         }
-        setIsLoading(true);
-        setError(null);
         try {
             const resp = await lnc.lnd.lightning.describeGraph({
                 include_unannounced: includeUnannounced,
                 include_auth_proof: includeAuthProof,
             });
-            setGraph(resp || { nodes: [], edges: [] });
+            return resp || { nodes: [], edges: [] };
         } catch (e) {
             console.error('describeGraph failed:', e);
-            setGraph(null);
             setError(e?.message || 'Failed to load graph.');
+        }
+        return null;
+    }, [lnc, includeUnannounced, includeAuthProof]);
+
+    const fetchForwardingData = useCallback(async () => {
+        if (!lnc?.lnd?.lightning) {
+            setForwardingError('Lightning service not available on this LNC session.');
+            return null;
+        }
+        if (typeof lnc.lnd.lightning.forwardingHistory !== 'function') {
+            setForwardingError('forwardingHistory is not available. Ensure LNC permissions include lightning RPC: ForwardingHistory.');
+            return null;
+        }
+        try {
+            const end = Math.floor(Date.now() / 1000);
+            const start = end - rangeDays * 24 * 60 * 60;
+            const resp = await lnc.lnd.lightning.forwardingHistory({
+                start_time: String(start),
+                end_time: String(end),
+                index_offset: 0,
+                num_max_events: 50000,
+                peer_alias_lookup: true,
+            });
+            const events = resp?.forwardingEvents || resp?.forwarding_events || [];
+            return Array.isArray(events) ? events : [];
+        } catch (e) {
+            console.error('forwardingHistory failed:', e);
+            setForwardingError(e?.message || 'Failed to load forwarding history.');
+            return null;
+        }
+    }, [lnc, rangeDays]);
+
+    const fetchData = useCallback(async () => {
+        setIsLoading(true);
+        setError(null);
+        setForwardingError(null);
+        try {
+            const [graphResp, forwardingResp] = await Promise.all([
+                fetchGraphData(),
+                fetchForwardingData(),
+            ]);
+            if (graphResp) setGraph(graphResp);
+            if (Array.isArray(forwardingResp)) setForwardingEvents(forwardingResp);
         } finally {
             setIsLoading(false);
         }
-    }, [lnc, includeUnannounced, includeAuthProof]);
+    }, [fetchGraphData, fetchForwardingData]);
 
     const normalized = useMemo(() => {
         const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
@@ -230,12 +273,85 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             });
         });
 
+        const channelById = new Map();
+        edges.forEach((e) => {
+            const chanId = String(e.channel_id || e.channelId || '');
+            if (!chanId) return;
+            const n1 = String(e.node1_pub || e.node1Pub || '').toLowerCase();
+            const n2 = String(e.node2_pub || e.node2Pub || '').toLowerCase();
+            channelById.set(chanId, {
+                n1,
+                n2,
+                a1: nodeByPub.get(n1)?.alias || '',
+                a2: nodeByPub.get(n2)?.alias || '',
+            });
+        });
+
         const nodeStats = Array.from(statsByNode.values());
         nodeStats.sort((a, b) => b.channels - a.channels || b.adjacentCapacity - a.adjacentCapacity);
         const totalCapacity = capacities.reduce((s, v) => s + v, 0);
 
-        return { nodes, edges, nodeByPub, nodeStats, totalCapacity, capacities, feeRatePpm, feeBaseMsat, tlDelta, disabledPolicies, totalPolicies };
+        return { nodes, edges, nodeByPub, nodeStats, totalCapacity, capacities, feeRatePpm, feeBaseMsat, tlDelta, disabledPolicies, totalPolicies, channelById };
     }, [graph]);
+
+    const forwardingSummary = useMemo(() => {
+        const events = Array.isArray(forwardingEvents) ? forwardingEvents : [];
+        let totalFeeSat = 0;
+        let totalAmtInSat = 0;
+        let totalAmtOutSat = 0;
+        const byChan = new Map();
+
+        const toSat = (v) => {
+            const n = toNum(v);
+            return n;
+        };
+        const tsToMs = (e) => {
+            const ns = toNum(e.timestampNs ?? e.timestamp_ns ?? 0);
+            if (ns) return Math.floor(ns / 1_000_000);
+            const sec = toNum(e.timestamp ?? 0);
+            return sec ? sec * 1000 : 0;
+        };
+
+        events.forEach((e) => {
+            const chanIn = String(e.chanIdIn || e.chan_id_in || '');
+            const chanOut = String(e.chanIdOut || e.chan_id_out || '');
+            const feeSat = toSat(e.fee ?? e.feeSat ?? 0);
+            const amtIn = toSat(e.amtIn ?? e.amtInSat ?? 0);
+            const amtOut = toSat(e.amtOut ?? e.amtOutSat ?? 0);
+            const ts = tsToMs(e);
+
+            totalFeeSat += feeSat;
+            totalAmtInSat += amtIn;
+            totalAmtOutSat += amtOut;
+
+            const upsert = (chanId, direction) => {
+                if (!chanId) return;
+                if (!byChan.has(chanId)) {
+                    byChan.set(chanId, { chanId, count: 0, feeSat: 0, amtInSat: 0, amtOutSat: 0, lastTs: 0, direction });
+                }
+                const row = byChan.get(chanId);
+                row.count += 1;
+                row.feeSat += feeSat;
+                row.amtInSat += amtIn;
+                row.amtOutSat += amtOut;
+                row.lastTs = Math.max(row.lastTs, ts);
+            };
+
+            upsert(chanIn, 'in');
+            upsert(chanOut, 'out');
+        });
+
+        const rows = Array.from(byChan.values());
+        rows.sort((a, b) => b.feeSat - a.feeSat || b.count - a.count);
+
+        return {
+            total: events.length,
+            totalFeeSat,
+            totalAmtInSat,
+            totalAmtOutSat,
+            topRows: rows.slice(0, 12),
+        };
+    }, [forwardingEvents]);
 
     const kpis = useMemo(() => {
         const nodeCount = normalized.nodes.length;
@@ -449,6 +565,21 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                     </p>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
+                        style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.04)', color: 'var(--text-secondary)' }}>
+                        <span className="uppercase tracking-widest font-semibold">Range</span>
+                        <select
+                            value={rangeDays}
+                            onChange={(e) => setRangeDays(Number(e.target.value))}
+                            className="bg-transparent outline-none text-xs"
+                            style={{ color: 'var(--text-primary)' }}
+                        >
+                            <option value={7}>7d</option>
+                            <option value={14}>14d</option>
+                            <option value={30}>30d</option>
+                            <option value={90}>90d</option>
+                        </select>
+                    </div>
                     <label className="text-xs flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer"
                         style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.04)', color: 'var(--text-secondary)' }}>
                         <input type="checkbox" checked={includeUnannounced} onChange={(e) => setIncludeUnannounced(e.target.checked)} />
@@ -460,7 +591,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         include_auth_proof
                     </label>
                     <button
-                        onClick={fetchGraph}
+                        onClick={fetchData}
                         disabled={isLoading}
                         style={{
                             padding: '10px 18px',
@@ -476,7 +607,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                             transition: 'opacity 0.2s',
                         }}
                     >
-                        {isLoading ? 'Loading…' : 'Fetch Graph'}
+                        {isLoading ? 'Loading…' : 'Fetch Data'}
                     </button>
                     <button
                         onClick={() => graph && makeDownload(`describeGraph-${new Date().toISOString()}.json`, graph)}
@@ -503,13 +634,18 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                     {error}
                 </div>
             )}
+            {forwardingError && (
+                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--error-bg)', color: 'var(--error-text)', border: '1px solid var(--error-text)' }}>
+                    {forwardingError}
+                </div>
+            )}
 
             {!graph && !isLoading && !error && (
                 <div className="rounded-xl p-8 text-sm text-center" style={{ backgroundColor: 'var(--form-bg)', color: 'var(--text-secondary)' }}>
                     <div className="text-xs uppercase tracking-widest font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
                         Ready When You Are
                     </div>
-                    <p>Click <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Fetch Graph</span> to load the Lightning network snapshot and unlock analytics.</p>
+                    <p>Click <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Fetch Data</span> to load the Lightning network snapshot and forwarding history.</p>
                 </div>
             )}
 
@@ -529,6 +665,64 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                             sub={`P95 fee: ${Math.round(kpis.feeP95).toLocaleString()} ppm · P95 base: ${Math.round(kpis.feeBaseP95).toLocaleString()} msat`}
                         />
                     </div>
+
+                    {/* Forwarding intelligence */}
+                    <ChartCard
+                        title="Forwarding Intelligence"
+                        subtitle={`Private forwarding history · last ${rangeDays} days`}
+                        darkMode={darkMode}
+                    >
+                        {forwardingEvents.length === 0 ? (
+                            <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                No forwarding events returned for this window.
+                            </div>
+                        ) : (
+                            <div className="space-y-5">
+                                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                                    <StatCard title="Forwards" value={forwardingSummary.total.toLocaleString()} darkMode={darkMode} color="var(--accent-2)" />
+                                    <StatCard title="Fees Earned" value={`${fmtSats(forwardingSummary.totalFeeSat)} sats`} darkMode={darkMode} color="var(--accent-1)" />
+                                    <StatCard title="Volume" value={`${fmtSats(forwardingSummary.totalAmtInSat)} sats`} darkMode={darkMode} color="var(--accent-3)" />
+                                </div>
+                                <div className="text-xs uppercase tracking-widest font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                                    Top channels by fee (mapped to graph)
+                                </div>
+                                <div style={{ overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                        <thead>
+                                            <tr>
+                                                <th style={thStyle}>Channel</th>
+                                                <th style={thStyle}>Direction</th>
+                                                <th style={thStyle}>Forwards</th>
+                                                <th style={thStyle}>Fees</th>
+                                                <th style={thStyle}>Avg Fee</th>
+                                                <th style={thStyle}>Last Seen</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {forwardingSummary.topRows.map((row) => {
+                                                const meta = normalized.channelById.get(row.chanId);
+                                                const label = meta
+                                                    ? `${meta.a1 || shortHex(meta.n1, 10)} ↔ ${meta.a2 || shortHex(meta.n2, 10)}`
+                                                    : shortHex(row.chanId, 16);
+                                                const lastSeen = row.lastTs ? new Date(row.lastTs).toLocaleString() : '—';
+                                                const avgFee = row.count ? Math.round(row.feeSat / row.count) : 0;
+                                                return (
+                                                    <tr key={`${row.chanId}-${row.direction}`}>
+                                                        <td style={{ ...tdStyle, fontWeight: 600 }}>{label}</td>
+                                                        <td style={tdStyle}>{row.direction === 'in' ? 'Inbound' : 'Outbound'}</td>
+                                                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{row.count.toLocaleString()}</td>
+                                                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtSats(row.feeSat)} sats</td>
+                                                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{avgFee.toLocaleString()} sats</td>
+                                                        <td style={{ ...tdStyle, fontSize: 12, color: 'var(--text-secondary)' }}>{lastSeen}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </ChartCard>
 
                     {/* Row 1: Top nodes + Fee ComposedChart */}
                     <div className="grid lg:grid-cols-2 gap-4">
