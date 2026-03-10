@@ -9,6 +9,10 @@ import {
     PieChart, Pie, Cell,
     ComposedChart, Line,
 } from 'recharts';
+import SectionBadge from '../components/analysis/SectionBadge';
+import ErrorBanner from '../components/analysis/ErrorBanner';
+import InlineSpinner from '../components/analysis/InlineSpinner';
+import DataSourceLegend from '../components/analysis/DataSourceLegend';
 
 const shortHex = (s, n = 10) => {
     if (!s) return '—';
@@ -768,25 +772,13 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         </h2>
                         <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-widest"
                             style={{ color: 'var(--text-secondary)' }}>
-                            <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(14,165,164,0.14)', color: 'var(--accent-1)' }}>
-                                Public Data
-                            </span>
-                            <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(37,99,235,0.16)', color: 'var(--accent-2)' }}>
-                                Private Data
-                            </span>
+                            <SectionBadge label="Public Data" variant="public" />
+                            <SectionBadge label="Private Data" variant="private" />
                         </div>
-                        <div className="grid gap-2 text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-1)' }}>Public</span>
-                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(14,165,164,0.12)', color: 'var(--accent-1)' }}>describeGraph</span>
-                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(14,165,164,0.12)', color: 'var(--accent-1)' }}>getNodeMetrics</span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-2)' }}>Private</span>
-                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(37,99,235,0.16)', color: 'var(--accent-2)' }}>forwardingHistory</span>
-                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(37,99,235,0.16)', color: 'var(--accent-2)' }}>queryMissionControl</span>
-                            </div>
-                        </div>
+                        <DataSourceLegend
+                            publicSources={['describeGraph', 'getNodeMetrics']}
+                            privateSources={['forwardingHistory', 'queryMissionControl']}
+                        />
                     </div>
                     <p className="text-sm mt-2 max-w-xl" style={{ color: 'var(--text-secondary)' }}>
                         Snapshot and explore network structure, fee strategies, and channel distribution in one view.
@@ -837,16 +829,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                     >
                         {isLoading ? 'Loading…' : 'Fetch Data'}
                     </button>
-                    {isLoading && (
-                        <div className="flex items-center gap-2 text-xs font-semibold"
-                            style={{ color: 'var(--text-secondary)' }}>
-                            <span
-                                className="inline-block h-3 w-3 rounded-full border-2 border-transparent border-t-current animate-spin"
-                                aria-hidden="true"
-                            />
-                            Fetching graph + private signals…
-                        </div>
-                    )}
+                    {isLoading && <InlineSpinner label="Fetching graph + private signals…" />}
                     <button
                         onClick={() => graph && makeDownload(`describeGraph-${new Date().toISOString()}.json`, graph)}
                         disabled={!graph}
@@ -867,26 +850,10 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                 </div>
             </div>
 
-            {error && (
-                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--error-bg)', color: 'var(--error-text)', border: '1px solid var(--error-text)' }}>
-                    {error}
-                </div>
-            )}
-            {forwardingError && (
-                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--error-bg)', color: 'var(--error-text)', border: '1px solid var(--error-text)' }}>
-                    {forwardingError}
-                </div>
-            )}
-            {missionError && (
-                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--error-bg)', color: 'var(--error-text)', border: '1px solid var(--error-text)' }}>
-                    {missionError}
-                </div>
-            )}
-            {nodeMetricsError && (
-                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--error-bg)', color: 'var(--error-text)', border: '1px solid var(--error-text)' }}>
-                    {nodeMetricsError}
-                </div>
-            )}
+            <ErrorBanner message={error} />
+            <ErrorBanner message={forwardingError} />
+            <ErrorBanner message={missionError} />
+            <ErrorBanner message={nodeMetricsError} />
 
             {!graph && !isLoading && !error && (
                 <div className="rounded-xl p-8 text-sm text-center" style={{ backgroundColor: 'var(--form-bg)', color: 'var(--text-secondary)' }}>
