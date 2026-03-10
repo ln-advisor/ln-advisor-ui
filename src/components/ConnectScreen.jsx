@@ -13,7 +13,8 @@ const ConnectScreen = ({
   handleConnect,
   handleLogin,
   connectionError,
-  isPaired
+  isPaired,
+  onPreview
 }) => {
   return (
     <div
@@ -183,6 +184,18 @@ const ConnectScreen = ({
             </a>
           </p>
         </div>
+        {onPreview && (
+          <div className="mt-6 text-center">
+            <button
+              type="button"
+              onClick={onPreview}
+              className="px-4 py-2 rounded-lg text-xs font-semibold transition-colors"
+              style={{ background: 'var(--badge-bg)', color: 'var(--text-secondary)' }}
+            >
+              Preview the dashboard
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

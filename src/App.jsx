@@ -13,6 +13,7 @@ import AppHeader from './components/AppHeader';
 import DarkModeToggle from './components/DarkModeToggle';
 import NavBar from './components/NavBar';
 import PeersModal from './components/PeersModal';
+import DemoGraphAnalysis from './components/DemoGraphAnalysis';
 
 import GraphAnalysisPage from './pages/GraphAnalysisPage';
 
@@ -52,6 +53,8 @@ function App() {
     setDarkMode(newMode);
     localStorage.setItem('darkMode', JSON.stringify(newMode));
   };
+
+  const [showDemo, setShowDemo] = useState(false);
 
   useEffect(() => {
     document.body.classList.toggle('dark-mode', darkMode);
@@ -282,6 +285,14 @@ function App() {
   }
 
   if (!lnc) {
+    if (showDemo) {
+      return (
+        <DemoGraphAnalysis
+          darkMode={darkMode}
+          onConnect={() => setShowDemo(false)}
+        />
+      );
+    }
     return (
       <ConnectScreen
         darkMode={darkMode}
@@ -295,6 +306,7 @@ function App() {
         handleLogin={handleLogin}
         connectionError={connectionError}
         isPaired={isPaired}
+        onPreview={() => setShowDemo(true)}
       />
     );
   }
