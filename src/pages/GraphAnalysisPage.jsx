@@ -1,10 +1,12 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { Buffer } from 'buffer';
 import {
     ResponsiveContainer,
     BarChart, Bar,
     XAxis, YAxis,
     Tooltip, CartesianGrid, Legend,
     ScatterChart, Scatter, ZAxis,
+    PieChart, Pie, Cell,
     ComposedChart, Line,
 } from 'recharts';
 
@@ -32,6 +34,30 @@ const fmtSats = (n) => {
     if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
     if (num >= 1_000) return `${(num / 1_000).toFixed(1)}k`;
     return Math.round(num).toLocaleString();
+};
+
+const fmtMsat = (n) => {
+    const num = toNum(n);
+    if (!num) return '0';
+    if (num >= 1_000_000_000_000) return `${(num / 1_000_000_000_000).toFixed(2)}T`;
+    if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(2)}B`;
+    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+    if (num >= 1_000) return `${(num / 1_000).toFixed(1)}k`;
+    return Math.round(num).toLocaleString();
+};
+
+const ageLabel = (seconds) => {
+    if (!seconds || seconds < 0) return '—';
+    const mins = Math.floor(seconds / 60);
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d`;
+    const weeks = Math.floor(days / 7);
+    if (weeks < 4) return `${weeks}w`;
+    const months = Math.floor(days / 30);
+    return `${months}mo`;
 };
 
 const getPolicyField = (p, camel, snake, fallback = 0) => {
@@ -128,6 +154,8 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [forwardingEvents, setForwardingEvents] = useState([]);
     const [forwardingError, setForwardingError] = useState(null);
     const [rangeDays, setRangeDays] = useState(7);
+    const [missionControl, setMissionControl] = useState(null);
+    const [missionError, setMissionError] = useState(null);
     const [includeUnannounced, setIncludeUnannounced] = useState(false);
     const [includeAuthProof, setIncludeAuthProof] = useState(false);
     const [nodeQuery, setNodeQuery] = useState('');
@@ -187,21 +215,43 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         }
     }, [lnc, rangeDays]);
 
+    const fetchMissionControlData = useCallback(async () => {
+        if (!lnc?.lnd?.router) {
+            setMissionError('Router service not available on this LNC session.');
+            return null;
+        }
+        if (typeof lnc.lnd.router.queryMissionControl !== 'function') {
+            setMissionError('queryMissionControl is not available. Ensure LNC permissions include router RPC: QueryMissionControl.');
+            return null;
+        }
+        try {
+            const resp = await lnc.lnd.router.queryMissionControl({});
+            return resp || { pairs: [] };
+        } catch (e) {
+            console.error('queryMissionControl failed:', e);
+            setMissionError(e?.message || 'Failed to load mission control data.');
+            return null;
+        }
+    }, [lnc]);
+
     const fetchData = useCallback(async () => {
         setIsLoading(true);
         setError(null);
         setForwardingError(null);
+        setMissionError(null);
         try {
-            const [graphResp, forwardingResp] = await Promise.all([
+            const [graphResp, forwardingResp, missionResp] = await Promise.all([
                 fetchGraphData(),
                 fetchForwardingData(),
+                fetchMissionControlData(),
             ]);
             if (graphResp) setGraph(graphResp);
             if (Array.isArray(forwardingResp)) setForwardingEvents(forwardingResp);
+            if (missionResp) setMissionControl(missionResp);
         } finally {
             setIsLoading(false);
         }
-    }, [fetchGraphData, fetchForwardingData]);
+    }, [fetchGraphData, fetchForwardingData, fetchMissionControlData]);
 
     const normalized = useMemo(() => {
         const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
@@ -352,6 +402,131 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             topRows: rows.slice(0, 12),
         };
     }, [forwardingEvents]);
+
+    const missionSummary = useMemo(() => {
+        const bytesToHex = (value) => {
+            if (!value) return '';
+            try {
+                if (value instanceof Uint8Array) return Buffer.from(value).toString('hex');
+                if (typeof value === 'string') {
+                    const v = value.trim().toLowerCase();
+                    if (/^[0-9a-f]+$/.test(v)) return v;
+                    return Buffer.from(value, 'base64').toString('hex');
+                }
+            } catch (err) {
+                console.warn('bytesToHex failed:', err);
+            }
+            return '';
+        };
+
+        const pairs = Array.isArray(missionControl?.pairs) ? missionControl.pairs : [];
+        const now = Date.now() / 1000;
+        const normPairs = pairs.map((p) => {
+            const from = bytesToHex(p.node_from || p.nodeFrom);
+            const to = bytesToHex(p.node_to || p.nodeTo);
+            const h = p.history || p.pairHistory || {};
+            const failTime = toNum(h.fail_time ?? h.failTime);
+            const successTime = toNum(h.success_time ?? h.successTime);
+            const failAmtSat = toNum(h.fail_amt_sat ?? h.failAmtSat);
+            const successAmtSat = toNum(h.success_amt_sat ?? h.successAmtSat);
+            const failAmtMsat = toNum(h.fail_amt_msat ?? h.failAmtMsat) || (failAmtSat ? failAmtSat * 1000 : 0);
+            const successAmtMsat = toNum(h.success_amt_msat ?? h.successAmtMsat) || (successAmtSat ? successAmtSat * 1000 : 0);
+            const successAge = successTime ? Math.max(0, now - successTime) : 0;
+            const failAge = failTime ? Math.max(0, now - failTime) : 0;
+            const successWeight = successAmtMsat ? Math.log10(successAmtMsat + 1) : 0;
+            const failWeight = failAmtMsat ? Math.log10(failAmtMsat + 1) : 0;
+            const successScore = successTime ? (1 / (1 + successAge / 86400)) * successWeight : 0;
+            const failPenalty = failTime ? (1 / (1 + failAge / 86400)) * failWeight : 0;
+            const score = successScore - failPenalty * 0.6;
+            return {
+                from,
+                to,
+                failTime,
+                successTime,
+                failAmtSat,
+                successAmtSat,
+                failAmtMsat,
+                successAmtMsat,
+                successAge,
+                failAge,
+                score,
+            };
+        });
+
+        const total = normPairs.length;
+        const withSuccess = normPairs.filter((p) => p.successTime > 0).length;
+        const withFail = normPairs.filter((p) => p.failTime > 0).length;
+        const recentSuccess = normPairs.filter((p) => p.successAge && p.successAge <= 7 * 86400).length;
+        const recentFail = normPairs.filter((p) => p.failAge && p.failAge <= 7 * 86400).length;
+
+        const recencyBuckets = [
+            { label: '≤1h', max: 3600 },
+            { label: '≤24h', max: 86400 },
+            { label: '≤7d', max: 7 * 86400 },
+            { label: '≤30d', max: 30 * 86400 },
+            { label: '>30d', max: Number.POSITIVE_INFINITY },
+        ];
+        const recencyData = recencyBuckets.map((b) => ({ label: b.label, success: 0, fail: 0 }));
+        normPairs.forEach((p) => {
+            if (p.successAge) {
+                const i = recencyBuckets.findIndex((b) => p.successAge <= b.max);
+                if (i >= 0) recencyData[i].success += 1;
+            }
+            if (p.failAge) {
+                const i = recencyBuckets.findIndex((b) => p.failAge <= b.max);
+                if (i >= 0) recencyData[i].fail += 1;
+            }
+        });
+
+        let successOnly = 0;
+        let failOnly = 0;
+        let both = 0;
+        let none = 0;
+        normPairs.forEach((p) => {
+            const s = p.successTime > 0;
+            const f = p.failTime > 0;
+            if (s && f) both += 1;
+            else if (s) successOnly += 1;
+            else if (f) failOnly += 1;
+            else none += 1;
+        });
+        const statusPie = [
+            { name: 'Success only', value: successOnly, color: 'var(--accent-1)' },
+            { name: 'Fail only', value: failOnly, color: 'var(--accent-3)' },
+            { name: 'Both', value: both, color: 'var(--accent-2)' },
+            { name: 'No data', value: none, color: '#94a3b8' },
+        ];
+
+        const scatterData = [];
+        const step = Math.max(1, Math.floor(normPairs.length / 500));
+        for (let i = 0; i < normPairs.length; i += step) {
+            const p = normPairs[i];
+            scatterData.push({
+                success: Math.round(p.successAmtMsat / 1000),
+                fail: Math.round(p.failAmtMsat / 1000),
+            });
+        }
+
+        const byScoreDesc = [...normPairs].sort((a, b) => b.score - a.score);
+        const byScoreAsc = [...normPairs].sort((a, b) => a.score - b.score);
+        const topPairs = byScoreDesc.slice(0, 12);
+        const lowPairs = byScoreAsc.slice(0, 12);
+        const topPairsTable = byScoreDesc.slice(0, 200);
+
+        return {
+            total,
+            withSuccess,
+            withFail,
+            recentSuccess,
+            recentFail,
+            recencyData,
+            statusPie,
+            scatterData,
+            topPairs,
+            lowPairs,
+            topPairsTable,
+        };
+    }, [missionControl]);
 
     const kpis = useMemo(() => {
         const nodeCount = normalized.nodes.length;
@@ -639,6 +814,11 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                     {forwardingError}
                 </div>
             )}
+            {missionError && (
+                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--error-bg)', color: 'var(--error-text)', border: '1px solid var(--error-text)' }}>
+                    {missionError}
+                </div>
+            )}
 
             {!graph && !isLoading && !error && (
                 <div className="rounded-xl p-8 text-sm text-center" style={{ backgroundColor: 'var(--form-bg)', color: 'var(--text-secondary)' }}>
@@ -723,6 +903,224 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                             </div>
                         )}
                     </ChartCard>
+
+                    <ChartCard
+                        title="Mission Control Intelligence"
+                        subtitle="Path reliability signals from router history"
+                        darkMode={darkMode}
+                    >
+                        {!missionControl ? (
+                            <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                Mission control data not available yet.
+                            </div>
+                        ) : (
+                            <div className="space-y-5">
+                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                    <StatCard title="Pairs tracked" value={missionSummary.total.toLocaleString()} color="var(--accent-2)" darkMode={darkMode} />
+                                    <StatCard title="Pairs with success" value={missionSummary.withSuccess.toLocaleString()} color="var(--accent-1)" darkMode={darkMode} sub={`${missionSummary.recentSuccess} in 7d`} />
+                                    <StatCard title="Pairs with failure" value={missionSummary.withFail.toLocaleString()} color="var(--accent-3)" darkMode={darkMode} sub={`${missionSummary.recentFail} in 7d`} />
+                                    <StatCard title="Signal balance" value={`${missionSummary.withSuccess + missionSummary.withFail}`} color="var(--accent-4)" darkMode={darkMode} sub="Success + fail pairs" />
+                                </div>
+                            </div>
+                        )}
+                    </ChartCard>
+
+                    {missionControl && (
+                        <div className="grid lg:grid-cols-2 gap-4">
+                            <ChartCard
+                                title="Recency distribution"
+                                subtitle="How fresh are success and failure signals?"
+                                darkMode={darkMode}
+                            >
+                                <div style={{ width: '100%', height: 300 }}>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={missionSummary.recencyData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                            <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+                                            <XAxis dataKey="label" tick={{ fill: chartTheme.axis, fontSize: 11 }} />
+                                            <YAxis tick={{ fill: chartTheme.axis, fontSize: 11 }} />
+                                            <Tooltip
+                                                contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: 10 }}
+                                                labelStyle={{ color: 'var(--text-secondary)' }}
+                                            />
+                                            <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-secondary)' }} />
+                                            <Bar dataKey="success" fill="var(--accent-1)" radius={[6, 6, 0, 0]} name="Success" />
+                                            <Bar dataKey="fail" fill="var(--accent-3)" radius={[6, 6, 0, 0]} name="Failure" />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </ChartCard>
+
+                            <ChartCard
+                                title="Signal coverage"
+                                subtitle="What share of pairs have success/failure history?"
+                                darkMode={darkMode}
+                            >
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-center">
+                                    <div style={{ width: '100%', height: 260 }}>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <PieChart>
+                                                <Pie data={missionSummary.statusPie} dataKey="value" nameKey="name" innerRadius={50} outerRadius={90} paddingAngle={2}>
+                                                    {missionSummary.statusPie.map((entry) => (
+                                                        <Cell key={entry.name} fill={entry.color} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip
+                                                    contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: 10 }}
+                                                />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <div className="space-y-2 text-sm">
+                                        {missionSummary.statusPie.map((row) => (
+                                            <div key={row.name} className="flex items-center justify-between">
+                                                <span className="flex items-center gap-2">
+                                                    <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: row.color }} />
+                                                    {row.name}
+                                                </span>
+                                                <span style={{ color: 'var(--text-secondary)' }}>{row.value.toLocaleString()}</span>
+                                            </div>
+                                        ))}
+                                        <p className="text-xs mt-4" style={{ color: 'var(--text-secondary)' }}>
+                                            Use this view to gauge how rich mission control history is before scoring peers.
+                                        </p>
+                                    </div>
+                                </div>
+                            </ChartCard>
+                        </div>
+                    )}
+
+                    {missionControl && (
+                        <div className="grid lg:grid-cols-2 gap-4">
+                            <ChartCard
+                                title="Success vs failure amounts"
+                                subtitle="Each dot = one pair history (k sats)"
+                                darkMode={darkMode}
+                            >
+                                {missionSummary.scatterData.length === 0 ? (
+                                    <div className="text-sm h-64 flex items-center justify-center" style={{ color: 'var(--text-secondary)' }}>No data.</div>
+                                ) : (
+                                    <div style={{ width: '100%', height: 300 }}>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <ScatterChart margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
+                                                <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+                                                <XAxis dataKey="success" name="Success (k sats)" type="number" tick={{ fill: chartTheme.axis, fontSize: 10 }} />
+                                                <YAxis dataKey="fail" name="Fail (k sats)" type="number" tick={{ fill: chartTheme.axis, fontSize: 10 }} />
+                                                <Tooltip
+                                                    cursor={{ strokeDasharray: '3 3' }}
+                                                    contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: 10 }}
+                                                    formatter={(v, name) => [`${v.toLocaleString()} k sats`, name]}
+                                                />
+                                                <Scatter data={missionSummary.scatterData} fill="var(--accent-2)" fillOpacity={0.6} />
+                                            </ScatterChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                )}
+                            </ChartCard>
+
+                            <ChartCard
+                                title="Top + weak pairs"
+                                subtitle="Score blends success recency and failure penalty"
+                                darkMode={darkMode}
+                            >
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <div>
+                                        <div className="text-xs uppercase tracking-widest font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+                                            Strong pairs
+                                        </div>
+                                        <div className="space-y-2">
+                                            {missionSummary.topPairs.map((row) => {
+                                                const fromAlias = normalized.nodeByPub.get(row.from)?.alias || shortHex(row.from, 10);
+                                                const toAlias = normalized.nodeByPub.get(row.to)?.alias || shortHex(row.to, 10);
+                                                return (
+                                                    <div key={`${row.from}-${row.to}`} className="flex items-center justify-between text-sm">
+                                                        <span>{fromAlias} → {toAlias}</span>
+                                                        <span className="font-mono" style={{ color: 'var(--accent-1)' }}>{row.score.toFixed(2)}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs uppercase tracking-widest font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+                                            Weak pairs
+                                        </div>
+                                        <div className="space-y-2">
+                                            {missionSummary.lowPairs.map((row) => {
+                                                const fromAlias = normalized.nodeByPub.get(row.from)?.alias || shortHex(row.from, 10);
+                                                const toAlias = normalized.nodeByPub.get(row.to)?.alias || shortHex(row.to, 10);
+                                                return (
+                                                    <div key={`${row.from}-${row.to}`} className="flex items-center justify-between text-sm">
+                                                        <span>{fromAlias} → {toAlias}</span>
+                                                        <span className="font-mono" style={{ color: 'var(--accent-4)' }}>{row.score.toFixed(2)}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            </ChartCard>
+                        </div>
+                    )}
+
+                    {missionControl && (
+                        <div
+                            className="rounded-xl overflow-hidden transition-colors duration-300"
+                            style={{
+                                backgroundColor: 'var(--bg-card)',
+                                border: `1px solid ${darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)'}`,
+                                boxShadow: 'var(--card-shadow)',
+                            }}
+                        >
+                            <div className="flex items-center gap-3 px-4 pt-4 pb-0 border-b flex-wrap"
+                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)' }}>
+                                <div className="pb-3 font-semibold text-sm">Pairs (top 200)</div>
+                            </div>
+                            <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: 'var(--bg-card)' }}>
+                                        <tr>
+                                            <th style={thStyle}>From</th>
+                                            <th style={thStyle}>To</th>
+                                            <th style={thStyle}>Success amt</th>
+                                            <th style={thStyle}>Fail amt</th>
+                                            <th style={thStyle}>Last success</th>
+                                            <th style={thStyle}>Last fail</th>
+                                            <th style={thStyle}>Score</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {missionSummary.topPairsTable.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={7} className="p-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                                    No mission control pairs available.
+                                                </td>
+                                            </tr>
+                                        ) : missionSummary.topPairsTable.map((p, i) => {
+                                            const fromAlias = normalized.nodeByPub.get(p.from)?.alias || shortHex(p.from, 16);
+                                            const toAlias = normalized.nodeByPub.get(p.to)?.alias || shortHex(p.to, 16);
+                                            return (
+                                                <tr key={`${p.from}-${p.to}-${i}`} style={{ backgroundColor: i % 2 === 0 ? 'transparent' : darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)' }}>
+                                                    <td style={tdStyle}>
+                                                        <div className="font-semibold" style={{ color: 'var(--accent-1)' }}>{fromAlias || '—'}</div>
+                                                        <div className="text-xs" style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{shortHex(p.from, 16)}</div>
+                                                    </td>
+                                                    <td style={tdStyle}>
+                                                        <div className="font-semibold" style={{ color: 'var(--accent-2)' }}>{toAlias || '—'}</div>
+                                                        <div className="text-xs" style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{shortHex(p.to, 16)}</div>
+                                                    </td>
+                                                    <td style={{ ...tdStyle, textAlign: 'right' }}>{fmtMsat(p.successAmtMsat)} msat</td>
+                                                    <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--accent-3)' }}>{fmtMsat(p.failAmtMsat)} msat</td>
+                                                    <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)' }}>{ageLabel(p.successAge)}</td>
+                                                    <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)' }}>{ageLabel(p.failAge)}</td>
+                                                    <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: p.score >= 0 ? 'var(--accent-1)' : 'var(--accent-4)' }}>{p.score.toFixed(2)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Row 1: Top nodes + Fee ComposedChart */}
                     <div className="grid lg:grid-cols-2 gap-4">
