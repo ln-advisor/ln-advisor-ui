@@ -156,6 +156,8 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [rangeDays, setRangeDays] = useState(7);
     const [missionControl, setMissionControl] = useState(null);
     const [missionError, setMissionError] = useState(null);
+    const [nodeMetrics, setNodeMetrics] = useState(null);
+    const [nodeMetricsError, setNodeMetricsError] = useState(null);
     const [includeUnannounced, setIncludeUnannounced] = useState(false);
     const [includeAuthProof, setIncludeAuthProof] = useState(false);
     const [nodeQuery, setNodeQuery] = useState('');
@@ -234,24 +236,46 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         }
     }, [lnc]);
 
+    const fetchNodeMetricsData = useCallback(async () => {
+        if (!lnc?.lnd?.lightning) {
+            setNodeMetricsError('Lightning service not available on this LNC session.');
+            return null;
+        }
+        if (typeof lnc.lnd.lightning.getNodeMetrics !== 'function') {
+            setNodeMetricsError('getNodeMetrics is not available. Ensure LNC permissions include lightning RPC: GetNodeMetrics.');
+            return null;
+        }
+        try {
+            const resp = await lnc.lnd.lightning.getNodeMetrics({ types: ['BETWEENNESS_CENTRALITY'] });
+            return resp || { betweennessCentrality: {} };
+        } catch (e) {
+            console.error('getNodeMetrics failed:', e);
+            setNodeMetricsError(e?.message || 'Failed to load node metrics.');
+            return null;
+        }
+    }, [lnc]);
+
     const fetchData = useCallback(async () => {
         setIsLoading(true);
         setError(null);
         setForwardingError(null);
         setMissionError(null);
+        setNodeMetricsError(null);
         try {
-            const [graphResp, forwardingResp, missionResp] = await Promise.all([
+            const [graphResp, forwardingResp, missionResp, metricsResp] = await Promise.all([
                 fetchGraphData(),
                 fetchForwardingData(),
                 fetchMissionControlData(),
+                fetchNodeMetricsData(),
             ]);
             if (graphResp) setGraph(graphResp);
             if (Array.isArray(forwardingResp)) setForwardingEvents(forwardingResp);
             if (missionResp) setMissionControl(missionResp);
+            if (metricsResp) setNodeMetrics(metricsResp);
         } finally {
             setIsLoading(false);
         }
-    }, [fetchGraphData, fetchForwardingData, fetchMissionControlData]);
+    }, [fetchGraphData, fetchForwardingData, fetchMissionControlData, fetchNodeMetricsData]);
 
     const normalized = useMemo(() => {
         const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
@@ -528,6 +552,17 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         };
     }, [missionControl]);
 
+    const nodeMetricsSummary = useMemo(() => {
+        const entries = nodeMetrics?.betweennessCentrality || nodeMetrics?.betweenness_centrality || {};
+        const list = Object.entries(entries).map(([key, value]) => ({
+            pub: String(key || '').toLowerCase(),
+            value: toNum(value?.value ?? value?.normalizedValue ?? value?.normalized_value ?? 0),
+            normalized: toNum(value?.normalizedValue ?? value?.normalized_value ?? 0),
+        }));
+        list.sort((a, b) => b.normalized - a.normalized);
+        return list.slice(0, 15);
+    }, [nodeMetrics]);
+
     const kpis = useMemo(() => {
         const nodeCount = normalized.nodes.length;
         const edgeCount = normalized.edges.length;
@@ -727,13 +762,31 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             {/* Header */}
             <div className="flex items-start justify-between flex-wrap gap-4">
                 <div>
-                    <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex flex-col gap-3">
                         <h2 className="text-2xl md:text-3xl font-semibold font-display" style={{ color: 'var(--text-primary)' }}>
                             Graph Analysis
                         </h2>
-                        <span className="text-xs px-2.5 py-1 rounded-full font-semibold" style={{ background: 'var(--badge-bg)', color: 'var(--text-secondary)' }}>
-                            describeGraph
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-widest"
+                            style={{ color: 'var(--text-secondary)' }}>
+                            <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(14,165,164,0.14)', color: 'var(--accent-1)' }}>
+                                Public Data
+                            </span>
+                            <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(37,99,235,0.16)', color: 'var(--accent-2)' }}>
+                                Private Data
+                            </span>
+                        </div>
+                        <div className="grid gap-2 text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-1)' }}>Public</span>
+                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(14,165,164,0.12)', color: 'var(--accent-1)' }}>describeGraph</span>
+                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(14,165,164,0.12)', color: 'var(--accent-1)' }}>getNodeMetrics</span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-2)' }}>Private</span>
+                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(37,99,235,0.16)', color: 'var(--accent-2)' }}>forwardingHistory</span>
+                                <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(37,99,235,0.16)', color: 'var(--accent-2)' }}>queryMissionControl</span>
+                            </div>
+                        </div>
                     </div>
                     <p className="text-sm mt-2 max-w-xl" style={{ color: 'var(--text-secondary)' }}>
                         Snapshot and explore network structure, fee strategies, and channel distribution in one view.
@@ -784,6 +837,16 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                     >
                         {isLoading ? 'Loading…' : 'Fetch Data'}
                     </button>
+                    {isLoading && (
+                        <div className="flex items-center gap-2 text-xs font-semibold"
+                            style={{ color: 'var(--text-secondary)' }}>
+                            <span
+                                className="inline-block h-3 w-3 rounded-full border-2 border-transparent border-t-current animate-spin"
+                                aria-hidden="true"
+                            />
+                            Fetching graph + private signals…
+                        </div>
+                    )}
                     <button
                         onClick={() => graph && makeDownload(`describeGraph-${new Date().toISOString()}.json`, graph)}
                         disabled={!graph}
@@ -819,6 +882,11 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                     {missionError}
                 </div>
             )}
+            {nodeMetricsError && (
+                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--error-bg)', color: 'var(--error-text)', border: '1px solid var(--error-text)' }}>
+                    {nodeMetricsError}
+                </div>
+            )}
 
             {!graph && !isLoading && !error && (
                 <div className="rounded-xl p-8 text-sm text-center" style={{ backgroundColor: 'var(--form-bg)', color: 'var(--text-secondary)' }}>
@@ -851,6 +919,12 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         title="Forwarding Intelligence"
                         subtitle={`Private forwarding history · last ${rangeDays} days`}
                         darkMode={darkMode}
+                        right={
+                            <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
+                                style={{ background: 'rgba(37,99,235,0.12)', color: 'var(--accent-2)' }}>
+                                Private Data
+                            </span>
+                        }
                     >
                         {forwardingEvents.length === 0 ? (
                             <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -908,6 +982,12 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         title="Mission Control Intelligence"
                         subtitle="Path reliability signals from router history"
                         darkMode={darkMode}
+                        right={
+                            <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
+                                style={{ background: 'rgba(37,99,235,0.12)', color: 'var(--accent-2)' }}>
+                                Private Data
+                            </span>
+                        }
                     >
                         {!missionControl ? (
                             <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -1061,6 +1141,51 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                             </ChartCard>
                         </div>
                     )}
+
+                    <ChartCard
+                        title="Graph Influence (Betweenness Centrality)"
+                        subtitle="Public graph signal · top nodes by centrality"
+                        darkMode={darkMode}
+                        right={
+                            <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
+                                style={{ background: 'rgba(14,165,164,0.12)', color: 'var(--accent-1)' }}>
+                                Public Data
+                            </span>
+                        }
+                    >
+                        {nodeMetricsSummary.length === 0 ? (
+                            <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                No node metrics returned.
+                            </div>
+                        ) : (
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                        <tr>
+                                            <th style={thStyle}>Node</th>
+                                            <th style={thStyle}>Centrality</th>
+                                            <th style={thStyle}>Normalized</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {nodeMetricsSummary.map((row, i) => {
+                                            const alias = normalized.nodeByPub.get(row.pub)?.alias || shortHex(row.pub, 16);
+                                            return (
+                                                <tr key={`${row.pub}-${i}`} style={{ backgroundColor: i % 2 === 0 ? 'transparent' : darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)' }}>
+                                                    <td style={tdStyle}>
+                                                        <div className="font-semibold" style={{ color: 'var(--accent-1)' }}>{alias || '—'}</div>
+                                                        <div className="text-xs" style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{shortHex(row.pub, 16)}</div>
+                                                    </td>
+                                                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{row.value.toFixed(6)}</td>
+                                                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{row.normalized.toFixed(4)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </ChartCard>
 
                     {missionControl && (
                         <div
