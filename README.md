@@ -1,175 +1,54 @@
-# Senfina TapVolt - Taproot Asset Management App
+# LN Prop Advisor
 
-TapVolt is a React application that allows users to interact with their Lightning Network node (LND and Tapd integrated) for managing Taproot Assets. This application provides functionalities to:
+LN Prop Advisor is a Lightning node analysis tool powered by Lightning Node Connect (LNC), protected data pipelines (Props), and lightweight ML/AI signals. It helps operators make better fee, liquidity, and peer decisions without exporting raw private telemetry.
 
--   **View Owned Taproot Assets:** Display a list of Taproot Assets owned by the connected node.
--   **Mint New Assets:** Create and mint new Taproot Assets, including collectibles with metadata.
--   **Manage Minting Batches:** View, finalize, and cancel pending minting batches.
--   **Deposit Assets via Tapchannels:** Open Taproot Asset-enabled Lightning channels.
--   **Transfer Assets:** Send assets via Lightning Network or on-chain transactions (implementation pending).
+## What It Does
+- Connects to your Lightning node via LNC.
+- Pulls authenticated private telemetry and combines it with public graph context.
+- Applies privacy-preserving feature transforms.
+- Runs a pinned scoring/model workflow.
+- Produces recommendation bundles with clear provenance.
 
-## Features
+## Core Idea (Props Applied to Lightning)
+Public graph data is useful but incomplete. The most valuable optimization signals live inside a node’s private state (fees, balances, forward history, failures). Props-style pipelines let us use those signals safely:
+- **Privacy**: only derived features are exposed, not raw telemetry.
+- **Integrity**: recommendations are tied to authenticated data sources.
+- **Pinned inference**: outputs are tied to a known model/version.
 
--   **LNC Integration:** Connect to your LND node using Lightning Node Connect (LNC).
--   **Asset Listing:** Display detailed information about owned assets, including collectibles with metadata.
--   **Asset Minting:** Create new assets with customizable names, amounts, and metadata.
--   **Batch Management:** View, finalize, and cancel pending asset minting batches.
--   **Tapchannel Funding:** Open Taproot Asset-enabled Lightning channels.
--   **User-Friendly Interface:** Intuitive UI for easy asset management.
+## Current App Scope
+The current UI focuses on graph-level analysis and operator insight:
+- Graph snapshot and analytics (describeGraph)
+- Channel capacity distributions
+- Fee/ppm behavior by capacity
+- Node connectivity and topology highlights
 
-## Prerequisites
+This aligns with the MVP focus: start with graph + authenticated node data, then add recommendation bundles.
 
--   **Node.js** and **pnpm** installed.
--   A running [Lightning Terminal](https://github.com/lightninglabs/lightning-terminal) with LND node and Tapd integrated.
--   Lightning Node Connect (LNC) session created with Lightning Termninal.
--   Ensure your LND and Tapd are configured to support Taproot Assets. Check the `lit.conf` and `bitcoin.conf` examples in this repository.
+## MVP Recommendations (Planned)
+For the hackathon MVP we target two recommendation types:
+1. Dynamic fee recommendations
+2. Forward-opportunity ranking
 
-## Installation
+Each recommendation will be packaged as an **Attested Recommendation Bundle (ARB)** with provenance metadata.
 
-1.  Clone the repository:
+## Tech
+- React + Vite
+- Lightning Node Connect (`@lightninglabs/lnc-web`)
+- Recharts for visualization
 
-    ```bash
-    git clone <repository_url>
-    cd tapvolt-ui
-    ```
+## Run Locally
+1. Install dependencies:
+   ```bash
+   pnpm install
+   ```
+2. Start dev server:
+   ```bash
+   pnpm dev
+   ```
+3. Open the app:
+   ```text
+   http://localhost:5173
+   ```
 
-2.  Install dependencies:
-
-    ```bash
-    pnpm install
-    ```
-
-## Usage
-
-1.  Start the development server:
-
-    ```bash
-    pnpm start
-    ```
-
-2.  Open your browser and navigate to `http://localhost:3000`.
-
-3.  Enter your LNC pairing phrase to connect to your Lightning node.
-
-4.  Once connected, you can view your owned assets, mint new assets, and manage batches.
-
-## Configuration
-
--   Run bitcoind (signet) and configure it as the example of **bitcoin.conf** bellow that uses [Signet](https://mempool.space/signet):
--   Run [Lightning Terminal](https://github.com/lightninglabs/lightning-terminal) (Lit) in integrated mode for both lnd and tapd, example of **lit.conf**:
--   The application uses `@lightninglabs/lnc-web` for LNC integration. Make sure LNC is running and accessible.
--   LND, Lit and Tapd docs for better undestanding: [https://docs.lightning.engineering/the-lightning-network/overview](https://docs.lightning.engineering/the-lightning-network/overview)
-
-## Example `lit.conf` and `bitcoin.conf`
-
-See the `examples` directory for example configurations of `lit.conf` and `bitcoin.conf` for testing with Signet.
-
-- **bitcoin.conf**
-```
-signet=1
-server=1
-# change for your own
-rpcuser=RPC_USER 
-# change for your own
-rpcpassword=RPC_PASSWORD 
-rpcallowip=127.0.0.1
-zmqpubrawblock=tcp://127.0.0.1:28336
-zmqpubrawtx=tcp://127.0.0.1:28337
-prune=1000 
-
-[signet]
-rpcport=18337
-``` 
-- **lit.conf**
-
-```
-#Lit Settings
-enablerest=true
-uipassword=YOUR_UI_PASSWORD
-# Disable for testnets/signet
-autopilot.disable=true 
-# Lit UI
-httpslisten=127.0.0.1:8444 
-network=signet 
-loop-mode=disable
-pool-mode=disable
-lnd-mode=integrated # Must be integrated
-
-# LND Settings
-lnd.lnddir=DESIRED_LND_DIR_REMOVE_TO_KEEP_DEFAULT
-# Makes easier to find your node at https://mempool.space/signet/lightning
-lnd.alias=YOUR_NODE_ALIAS_ANY_VALUE_OR_JUST_REMOVE_IT 
-lnd.accept-keysend=true
-# Can be changed if desired, minimum channel size that can be oppenned with you
-lnd.minchansize=25000 
-lnd.bitcoin.active=1
-lnd.bitcoin.node=bitcoind
-lnd.bitcoind.dir=BITCOIN_DIRECTORY_REMOVE_FOR_DEFAULT
-# Same used by Bitcoind
-lnd.bitcoind.rpchost=127.0.0.1:18337 
-lnd.bitcoind.rpcuser=SAME_AS_BITCOIN.CONF
-lnd.bitcoind.rpcpass=SAME_AS_BITCOIN.CONF
-# Same used by Bitcoind
-lnd.bitcoind.zmqpubrawblock=tcp://127.0.0.1:28336 
-# Same used by Bitcoind
-lnd.bitcoind.zmqpubrawtx=tcp://127.0.0.1:28337 
-lnd.rpcmiddleware.enable=true
-lnd.autopilot.active=false
-
-# Tapd
-taproot-assets.datadir=DESIRED_TAPD_DIR_OR_REMOVE_FOR_DEFAULT
-taproot-assets.universe.federationserver=universe.signet.laisee.org:8443
-taproot-assets.proofcourieraddr=universerpc://universe.signet.laisee.org:8443
-
-#Taproot Assets Channels
-lnd.protocol.option-scid-alias=true
-lnd.protocol.zero-conf=true
-lnd.protocol.simple-taproot-chans=true
-lnd.protocol.simple-taproot-overlay-chans=true
-lnd.protocol.custom-message=17
-lnd.accept-keysend=true
-lnd.accept-amp=true
-
-# TOR (optional)
-lnd.tor.active=true
-lnd.tor.password=TOR_PWD
-lnd.tor.socks=127.0.0.1:TOR_SOCKS_PORT
-lnd.tor.streamisolation=true
-lnd.tor.v3=true
-lnd.tor.control=localhost:TOR_CONTROL_PORT
-
-``` 
-
-## Code Overview
-
--   **`App.js`:** Contains the main React application logic, including connection handling, asset listing, minting, and batch management.
--   **`@lightninglabs/lnc-web`:** Used for connecting to the Lightning node and for interacting with Taproot Asset functionalities.
--   **`Buffer`:** Used for encoding and decoding metadata.
-
-## Key Functionalities
-
--   **`handleConnect`:** Connects to the Lightning node using LNC.
--   **`getInfo`:** Fetches node information.
--   **`listChannels`:** Lists active Lightning channels.
--   **`listAssets`:** Retrieves and displays owned Taproot Assets, including collectibles with metadata.
--   **`listBatches`:** Lists pending asset minting batches.
--   **`mintAsset`:** Mints a new Taproot Asset.
--   **`finalizeBatch`:** Finalizes a pending minting batch.
--   **`cancelBatch`:** Cancels a pending minting batch.
--   **`fundChannel`:** Opens a Taproot Asset-enabled Lightning channel.
-
-## Future Enhancements
-
--   Implement asset transfer functionality via Lightning and on-chain.
--   Add more robust error handling and user feedback.
--   Enhance the UI/UX for better asset management.
--   Add asset transfer.
--   Implement collectibles minting.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
-
-## License
-
-MIT
+## Notes
+This project is a prototype of a privacy-preserving intelligence layer for Lightning node operators. It is not a custodian and does not require raw telemetry export.
