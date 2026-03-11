@@ -510,14 +510,37 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
 
                         <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
                             <div className="text-xs font-semibold uppercase tracking-widest text-emerald-400">Current Fees Snapshot</div>
-                            <div className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                            <div
+                                className="text-xs font-semibold px-2 py-1 rounded-full"
+                                style={{
+                                    color: darkMode ? '#c7d2fe' : '#3730a3',
+                                    backgroundColor: darkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.12)',
+                                }}
+                            >
                                 Live channel policies
                             </div>
                         </div>
 
                         <div className="grid md:grid-cols-2 gap-6">
-                            <div className="rounded-xl p-4" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }}>
-                                <p className="text-xs uppercase tracking-widest text-emerald-400 mb-3">Peer Fee To You</p>
+                            <div
+                                className="rounded-xl p-4 border"
+                                style={{
+                                    backgroundColor: darkMode ? 'rgba(16,185,129,0.08)' : 'rgba(16,185,129,0.06)',
+                                    borderColor: darkMode ? 'rgba(16,185,129,0.35)' : 'rgba(5,150,105,0.35)',
+                                }}
+                            >
+                                <div className="flex items-center justify-between mb-3">
+                                    <p className="text-xs uppercase tracking-widest text-emerald-400">Peer Fee To You</p>
+                                    <span
+                                        className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                                        style={{
+                                            color: darkMode ? '#a7f3d0' : '#065f46',
+                                            backgroundColor: darkMode ? 'rgba(16,185,129,0.2)' : 'rgba(16,185,129,0.12)',
+                                        }}
+                                    >
+                                        Incoming
+                                    </span>
+                                </div>
                                 <div className="grid grid-cols-2 gap-3 text-sm">
                                     {(() => {
                                         const peerFee = getFeeRatePpm(selectedChannel.peerPolicy);
@@ -526,35 +549,54 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                             <>
                                                 <div>
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Corrected Avg</div>
-                                                    <div className="text-lg font-bold text-emerald-400">{stats ? stats.correctedAvg.toFixed(0) : '—'} ppm</div>
+                                                    <div className="text-lg font-bold" style={{ color: darkMode ? '#34d399' : '#047857' }}>
+                                                        {stats ? stats.correctedAvg.toFixed(0) : '—'} ppm
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Weighted Avg</div>
-                                                    <div className="text-lg font-bold text-emerald-400">{stats ? stats.weightedAvg.toFixed(0) : '—'} ppm</div>
+                                                    <div className="text-lg font-bold" style={{ color: darkMode ? '#34d399' : '#047857' }}>
+                                                        {stats ? stats.weightedAvg.toFixed(0) : '—'} ppm
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Average</div>
-                                                    <div className="text-base font-semibold">{stats ? stats.avg.toFixed(0) : '—'} ppm</div>
+                                                    <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                        {stats ? stats.avg.toFixed(0) : '—'} ppm
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Std Dev</div>
-                                                    <div className="text-base font-semibold">{stats ? stats.std.toFixed(0) : '—'} ppm</div>
+                                                    <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                        {stats ? stats.std.toFixed(0) : '—'} ppm
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Min</div>
-                                                    <div className="text-base font-semibold">{stats ? stats.min.toFixed(0) : '—'} ppm</div>
+                                                    <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                        {stats ? stats.min.toFixed(0) : '—'} ppm
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Max</div>
-                                                    <div className="text-base font-semibold">{stats ? stats.max.toFixed(0) : '—'} ppm</div>
+                                                    <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                        {stats ? stats.max.toFixed(0) : '—'} ppm
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Median</div>
-                                                    <div className="text-base font-semibold">{stats ? stats.median.toFixed(0) : '—'} ppm</div>
+                                                    <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                        {stats ? stats.median.toFixed(0) : '—'} ppm
+                                                    </div>
                                                 </div>
-                                                <div>
+                                                <div
+                                                    className="rounded-lg p-2"
+                                                    style={{ backgroundColor: darkMode ? 'rgba(16,185,129,0.16)' : 'rgba(16,185,129,0.12)' }}
+                                                >
                                                     <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Peer Fee To You</div>
-                                                    <div className="text-base font-semibold">{peerFee !== null ? `${peerFee.toFixed(0)} ppm` : '—'}</div>
+                                                    <div className="text-base font-semibold" style={{ color: darkMode ? '#a7f3d0' : '#065f46' }}>
+                                                        {peerFee !== null ? `${peerFee.toFixed(0)} ppm` : '—'}
+                                                    </div>
                                                 </div>
                                             </>
                                         );
@@ -562,8 +604,25 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                 </div>
                             </div>
 
-                            <div className="rounded-xl p-4" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }}>
-                                <p className="text-xs uppercase tracking-widest text-fuchsia-400 mb-3">Fees Other Peers Set To It</p>
+                            <div
+                                className="rounded-xl p-4 border"
+                                style={{
+                                    backgroundColor: darkMode ? 'rgba(217,70,239,0.08)' : 'rgba(217,70,239,0.06)',
+                                    borderColor: darkMode ? 'rgba(217,70,239,0.35)' : 'rgba(192,38,211,0.35)',
+                                }}
+                            >
+                                <div className="flex items-center justify-between mb-3">
+                                    <p className="text-xs uppercase tracking-widest text-fuchsia-400">Fees Other Peers Set To It</p>
+                                    <span
+                                        className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                                        style={{
+                                            color: darkMode ? '#f5d0fe' : '#701a75',
+                                            backgroundColor: darkMode ? 'rgba(217,70,239,0.2)' : 'rgba(217,70,239,0.12)',
+                                        }}
+                                    >
+                                        Outgoing
+                                    </span>
+                                </div>
                                 {peerFeeLoading ? (
                                     <div className="text-sm animate-pulse text-indigo-400">Loading peer network fees...</div>
                                 ) : peerFeeError ? (
@@ -572,35 +631,52 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                     <div className="grid grid-cols-2 gap-3 text-sm">
                                         <div>
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Corrected Avg</div>
-                                            <div className="text-lg font-bold text-fuchsia-400">{peerFeeStats.correctedAvg.toFixed(0)} ppm</div>
+                                            <div className="text-lg font-bold" style={{ color: darkMode ? '#e879f9' : '#a21caf' }}>
+                                                {peerFeeStats.correctedAvg.toFixed(0)} ppm
+                                            </div>
                                         </div>
                                         <div>
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Weighted Avg</div>
-                                            <div className="text-lg font-bold text-fuchsia-400">{peerFeeStats.weightedAvg.toFixed(0)} ppm</div>
+                                            <div className="text-lg font-bold" style={{ color: darkMode ? '#e879f9' : '#a21caf' }}>
+                                                {peerFeeStats.weightedAvg.toFixed(0)} ppm
+                                            </div>
                                         </div>
                                         <div>
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Average</div>
-                                            <div className="text-base font-semibold">{peerFeeStats.avg.toFixed(0)} ppm</div>
+                                            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                {peerFeeStats.avg.toFixed(0)} ppm
+                                            </div>
                                         </div>
                                         <div>
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Std Dev</div>
-                                            <div className="text-base font-semibold">{peerFeeStats.std.toFixed(0)} ppm</div>
+                                            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                {peerFeeStats.std.toFixed(0)} ppm
+                                            </div>
                                         </div>
                                         <div>
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Min</div>
-                                            <div className="text-base font-semibold">{peerFeeStats.min.toFixed(0)} ppm</div>
+                                            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                {peerFeeStats.min.toFixed(0)} ppm
+                                            </div>
                                         </div>
                                         <div>
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Max</div>
-                                            <div className="text-base font-semibold">{peerFeeStats.max.toFixed(0)} ppm</div>
+                                            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                {peerFeeStats.max.toFixed(0)} ppm
+                                            </div>
                                         </div>
                                         <div>
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Median</div>
-                                            <div className="text-base font-semibold">{peerFeeStats.median.toFixed(0)} ppm</div>
+                                            <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                {peerFeeStats.median.toFixed(0)} ppm
+                                            </div>
                                         </div>
-                                        <div>
+                                        <div
+                                            className="rounded-lg p-2"
+                                            style={{ backgroundColor: darkMode ? 'rgba(217,70,239,0.16)' : 'rgba(217,70,239,0.12)' }}
+                                        >
                                             <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>Your Fee To Peer</div>
-                                            <div className="text-base font-semibold">
+                                            <div className="text-base font-semibold" style={{ color: darkMode ? '#f5d0fe' : '#701a75' }}>
                                                 {Number.isFinite(getFeeRatePpm(selectedChannel.myPolicy))
                                                     ? `${getFeeRatePpm(selectedChannel.myPolicy).toFixed(0)} ppm`
                                                     : '—'}
@@ -678,7 +754,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                     <>
                                         <div className="rounded-xl p-4" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }}>
                                             <div className="flex items-center justify-between mb-3">
-                                                <p className="text-xs uppercase tracking-widest text-emerald-400">Inbound Fees To Peer</p>
+                                                <p className="text-xs uppercase tracking-widest text-fuchsia-400">Inbound Fees To Peer</p>
                                                 {inboundZoom && (
                                                     <button
                                                         className="text-[10px] px-2 py-1 rounded-full"
@@ -729,7 +805,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                                                 className="rounded-t border"
                                                                                 style={{
                                                                                     height: `${(b.count / inboundHist.maxCount) * chartHeight}px`,
-                                                                                    backgroundColor: '#34d399',
+                                                                                    backgroundColor: darkMode ? '#f5a7ff' : '#d946ef',
                                                                                     borderColor: darkMode ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)',
                                                                                     minHeight: b.count ? 2 : 0,
                                                                                 }}
@@ -784,7 +860,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
 
                                         <div className="rounded-xl p-4" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }}>
                                             <div className="flex items-center justify-between mb-3">
-                                                <p className="text-xs uppercase tracking-widest text-fuchsia-400">Outbound Fees From Peer</p>
+                                                <p className="text-xs uppercase tracking-widest text-emerald-400">Outbound Fees From Peer</p>
                                                 {outboundZoom && (
                                                     <button
                                                         className="text-[10px] px-2 py-1 rounded-full"
@@ -835,7 +911,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                                                 className="rounded-t border"
                                                                                 style={{
                                                                                     height: `${(b.count / outboundHist.maxCount) * chartHeight}px`,
-                                                                                    backgroundColor: '#f472b6',
+                                                                                    backgroundColor: darkMode ? '#34d399' : '#10b981',
                                                                                     borderColor: darkMode ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)',
                                                                                     minHeight: b.count ? 2 : 0,
                                                                                 }}
@@ -892,7 +968,13 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                             })()}
                         </div>
 
-                        <div className="mt-6 rounded-xl p-4" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }}>
+                        <div
+                            className="mt-6 rounded-xl p-4 border"
+                            style={{
+                                backgroundColor: darkMode ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.06)',
+                                borderColor: darkMode ? 'rgba(99,102,241,0.35)' : 'rgba(79,70,229,0.35)',
+                            }}
+                        >
                             <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
                                 <p className="text-xs uppercase tracking-widest text-indigo-400">Comparison</p>
                                 {(() => {
@@ -900,8 +982,14 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                     const inFee = getFeeRatePpm(selectedChannel.peerPolicy);
                                     const ratio = outFee && inFee ? (outFee / inFee) : null;
                                     return (
-                                        <div className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-                                            Out / In Ratio: <span className="text-indigo-400">{ratio ? ratio.toFixed(2) : '—'}x</span>
+                                        <div
+                                            className="text-xs font-semibold px-2 py-1 rounded-full"
+                                            style={{
+                                                color: darkMode ? '#c7d2fe' : '#3730a3',
+                                                backgroundColor: darkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.12)',
+                                            }}
+                                        >
+                                            Out / In Ratio: <span style={{ color: darkMode ? '#a5b4fc' : '#312e81' }}>{ratio ? ratio.toFixed(2) : '—'}x</span>
                                         </div>
                                     );
                                 })()}
@@ -922,38 +1010,66 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                     <div className="space-y-3 text-xs">
                                         <div>
                                             <div className="flex justify-between mb-1">
-                                                <span className="font-semibold text-emerald-400">Your Fee (Outbound)</span>
-                                                <span className="font-mono">{outFee ? `${outFee.toFixed(0)} ppm` : '—'}</span>
+                                                <span className="font-semibold" style={{ color: darkMode ? '#34d399' : '#047857' }}>
+                                                    Your Fee (Outbound)
+                                                </span>
+                                                <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                    {outFee ? `${outFee.toFixed(0)} ppm` : '—'}
+                                                </span>
                                             </div>
-                                            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
-                                                <div style={barStyle(outFee, maxOutbound, '#10b981')} className="h-full" />
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div className="flex justify-between mb-1">
-                                                <span className="font-semibold text-fuchsia-400">Peer Fee To You (Incoming)</span>
-                                                <span className="font-mono">{inFee ? `${inFee.toFixed(0)} ppm` : '—'}</span>
-                                            </div>
-                                            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
-                                                <div style={barStyle(inFee, maxInbound, '#e879f9')} className="h-full" />
+                                            <div
+                                                className="h-2.5 rounded-full overflow-hidden"
+                                                style={{ backgroundColor: darkMode ? 'rgba(16,185,129,0.18)' : 'rgba(16,185,129,0.18)' }}
+                                            >
+                                                <div style={barStyle(outFee, maxOutbound, darkMode ? '#34d399' : '#10b981')} className="h-full" />
                                             </div>
                                         </div>
                                         <div>
                                             <div className="flex justify-between mb-1">
-                                                <span className="font-semibold text-indigo-400">Network Avg Fees To Peer</span>
-                                                <span className="font-mono">{peerFeeStats ? `${peerFeeStats.correctedAvg.toFixed(0)} ppm` : '—'}</span>
+                                                <span className="font-semibold" style={{ color: darkMode ? '#e879f9' : '#a21caf' }}>
+                                                    Peer Fee To You (Incoming)
+                                                </span>
+                                                <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                    {inFee ? `${inFee.toFixed(0)} ppm` : '—'}
+                                                </span>
                                             </div>
-                                            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
-                                                <div style={barStyle(networkIn, maxOutbound, '#6366f1')} className="h-full" />
+                                            <div
+                                                className="h-2.5 rounded-full overflow-hidden"
+                                                style={{ backgroundColor: darkMode ? 'rgba(217,70,239,0.18)' : 'rgba(217,70,239,0.18)' }}
+                                            >
+                                                <div style={barStyle(inFee, maxInbound, darkMode ? '#f5a7ff' : '#d946ef')} className="h-full" />
                                             </div>
                                         </div>
                                         <div>
                                             <div className="flex justify-between mb-1">
-                                                <span className="font-semibold text-amber-400">Network Avg Fees From Peer</span>
-                                                <span className="font-mono">{peerOutFeeStats ? `${peerOutFeeStats.correctedAvg.toFixed(0)} ppm` : '—'}</span>
+                                                <span className="font-semibold" style={{ color: darkMode ? '#a5b4fc' : '#3730a3' }}>
+                                                    Network Avg Fees To Peer
+                                                </span>
+                                                <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                    {peerFeeStats ? `${peerFeeStats.correctedAvg.toFixed(0)} ppm` : '—'}
+                                                </span>
                                             </div>
-                                            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
-                                                <div style={barStyle(networkOut, maxInbound, '#f59e0b')} className="h-full" />
+                                            <div
+                                                className="h-2.5 rounded-full overflow-hidden"
+                                                style={{ backgroundColor: darkMode ? 'rgba(99,102,241,0.18)' : 'rgba(99,102,241,0.18)' }}
+                                            >
+                                                <div style={barStyle(networkIn, maxOutbound, darkMode ? '#a5b4fc' : '#4f46e5')} className="h-full" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="flex justify-between mb-1">
+                                                <span className="font-semibold" style={{ color: darkMode ? '#fbbf24' : '#b45309' }}>
+                                                    Network Avg Fees From Peer
+                                                </span>
+                                                <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                    {peerOutFeeStats ? `${peerOutFeeStats.correctedAvg.toFixed(0)} ppm` : '—'}
+                                                </span>
+                                            </div>
+                                            <div
+                                                className="h-2.5 rounded-full overflow-hidden"
+                                                style={{ backgroundColor: darkMode ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.18)' }}
+                                            >
+                                                <div style={barStyle(networkOut, maxInbound, darkMode ? '#fbbf24' : '#f59e0b')} className="h-full" />
                                             </div>
                                         </div>
                                     </div>
