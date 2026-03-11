@@ -14,6 +14,7 @@ function main(): void {
   const server = startApiServer(port);
   console.log(`API server listening on http://127.0.0.1:${port}`);
   console.log("Endpoints: POST /api/snapshot, POST /api/recommend, POST /api/verify");
+  console.log("Telemetry mode: send { telemetry: frontend-telemetry-envelope-v1 } to /api/snapshot and /api/recommend");
 
   const shutdown = (signal: NodeJS.Signals) => {
     console.log(`Received ${signal}, shutting down API server...`);
@@ -25,4 +26,3 @@ function main(): void {
 }
 
 main();
-

@@ -21,8 +21,11 @@
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
+    "deps:wsl:reset": "bash scripts/fix-wsl-deps.sh",
+    "telemetry:test": "tsx scripts/validate-frontend-telemetry.ts --mock",
     "api": "tsx scripts/start-api.ts",
     "api:test": "bash scripts/test-api-curl.sh",
+    "api:test:internal": "tsx scripts/test-api-telemetry-flow.ts",
     "test": "tsx scripts/run-regression-tests.ts"
   },
   "eslintConfig": {

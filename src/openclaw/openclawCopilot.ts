@@ -36,14 +36,16 @@ export interface OpenClawTaskResult {
           modelVersionChanged: boolean;
           privacyPolicyChanged: boolean;
           feeActionChanges: Array<{
-            channelId: string;
+            channelRef: string;
+            peerRef: string;
             previousAction: "raise" | "lower" | "hold" | "missing";
             currentAction: "raise" | "lower" | "hold" | "missing";
             previousSuggestedFeePpm: number | null;
             currentSuggestedFeePpm: number | null;
           }>;
           rankingChanges: Array<{
-            channelId: string;
+            channelRef: string;
+            peerRef: string;
             previousRank: number | null;
             currentRank: number | null;
             rankDelta: number | null;
@@ -53,12 +55,13 @@ export interface OpenClawTaskResult {
         };
       }
     | {
-        draftFeeUpdateCommands: Array<{
-          channelId: string;
+      draftFeeUpdateCommands: Array<{
+          channelRef: string;
+          peerRef: string;
           action: "raise" | "lower";
           currentFeePpm: number;
           suggestedFeePpm: number;
-          command: string;
+          commandTemplate: string;
           note: string;
         }>;
       };
@@ -91,12 +94,14 @@ const mapFeeByChannel = (arb: ArbBundle) => {
   const map = new Map<
     string,
     {
+      peerRef: string;
       action: "raise" | "lower" | "hold";
       suggestedFeePpm: number | null;
     }
   >();
   for (const item of arb.recommendation.feeRecommendations) {
-    map.set(item.channelId, {
+    map.set(item.channelRef, {
+      peerRef: item.peerRef,
       action: item.action,
       suggestedFeePpm: item.suggestedFeePpm,
     });
@@ -108,12 +113,14 @@ const mapRankingByChannel = (arb: ArbBundle) => {
   const map = new Map<
     string,
     {
+      peerRef: string;
       rank: number;
       score: number;
     }
   >();
   for (const item of arb.recommendation.forwardOpportunityRanking) {
-    map.set(item.channelId, {
+    map.set(item.channelRef, {
+      peerRef: item.peerRef,
       rank: item.rank,
       score: item.score,
     });
@@ -151,13 +158,14 @@ const runCompareTask = (request: OpenClawTaskRequest): OpenClawTaskResult => {
 
   const currentFeeMap = mapFeeByChannel(request.currentArb);
   const previousFeeMap = mapFeeByChannel(request.previousArb);
-  const feeChannels = [...new Set([...currentFeeMap.keys(), ...previousFeeMap.keys()])].sort(compareText);
+  const feeRefs = [...new Set([...currentFeeMap.keys(), ...previousFeeMap.keys()])].sort(compareText);
 
-  const feeActionChanges = feeChannels.map((channelId) => {
-    const current = currentFeeMap.get(channelId);
-    const previous = previousFeeMap.get(channelId);
+  const feeActionChanges = feeRefs.map((channelRef) => {
+    const current = currentFeeMap.get(channelRef);
+    const previous = previousFeeMap.get(channelRef);
     return {
-      channelId,
+      channelRef,
+      peerRef: current?.peerRef || previous?.peerRef || "",
       previousAction: previous?.action || "missing",
       currentAction: current?.action || "missing",
       previousSuggestedFeePpm: previous?.suggestedFeePpm ?? null,
@@ -167,13 +175,14 @@ const runCompareTask = (request: OpenClawTaskRequest): OpenClawTaskResult => {
 
   const currentRankMap = mapRankingByChannel(request.currentArb);
   const previousRankMap = mapRankingByChannel(request.previousArb);
-  const rankChannels = [...new Set([...currentRankMap.keys(), ...previousRankMap.keys()])].sort(compareText);
+  const rankRefs = [...new Set([...currentRankMap.keys(), ...previousRankMap.keys()])].sort(compareText);
 
-  const rankingChanges = rankChannels.map((channelId) => {
-    const current = currentRankMap.get(channelId);
-    const previous = previousRankMap.get(channelId);
+  const rankingChanges = rankRefs.map((channelRef) => {
+    const current = currentRankMap.get(channelRef);
+    const previous = previousRankMap.get(channelRef);
     return {
-      channelId,
+      channelRef,
+      peerRef: current?.peerRef || previous?.peerRef || "",
       previousRank: previous?.rank ?? null,
       currentRank: current?.rank ?? null,
       rankDelta:
@@ -219,16 +228,17 @@ const runDraftTask = (request: OpenClawTaskRequest): OpenClawTaskResult => {
         item.suggestedFeePpm !== null &&
         item.suggestedFeePpm !== item.currentFeePpm
     )
-    .sort((a, b) => compareText(a.channelId, b.channelId))
+    .sort((a, b) => compareText(a.channelRef, b.channelRef))
     .map((item) => ({
-      channelId: item.channelId,
+      channelRef: item.channelRef,
+      peerRef: item.peerRef,
       action: item.action as "raise" | "lower",
       currentFeePpm: item.currentFeePpm as number,
       suggestedFeePpm: item.suggestedFeePpm as number,
-      command:
-        `lncli updatechanpolicy --chan_id=${item.channelId} --fee_rate_ppm=${item.suggestedFeePpm}`,
+      commandTemplate:
+        `lncli updatechanpolicy --chan_id=<resolve:${item.channelRef}> --fee_rate_ppm=${item.suggestedFeePpm}`,
       note:
-        "Draft only. Review channel mapping and policy flags before execution.",
+        "Draft only. Resolve channelRef to local channelId in UI before execution.",
     }));
 
   return {
@@ -265,4 +275,3 @@ export function runOpenClawTask(request: OpenClawTaskRequest): OpenClawTaskResul
   }
   return runDraftTask(request);
 }
-

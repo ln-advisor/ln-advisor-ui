@@ -15,6 +15,11 @@ export interface NormalizedChannelState {
   revenueSat: number;
   failedForwardCount: number;
   lastActivityTimestamp: number | null;
+  peerBetweennessCentrality: number | null;
+  missionSuccessRate: number | null;
+  missionFailureRate: number | null;
+  missionLastSuccessTimestamp: number | null;
+  missionLastFailTimestamp: number | null;
 }
 
 export interface NormalizedPeerAggregate {
@@ -31,6 +36,12 @@ export interface NormalizedPeerAggregate {
   totalRevenueSat: number;
   totalFailedForwardCount: number;
   lastActivityTimestamp: number | null;
+  avgPeerBetweennessCentrality: number | null;
+  missionPairCount: number;
+  missionSuccessRate: number | null;
+  missionFailureRate: number | null;
+  missionLastSuccessTimestamp: number | null;
+  missionLastFailTimestamp: number | null;
 }
 
 export interface NormalizedNodeState {
@@ -50,6 +61,8 @@ export interface NormalizedNodeState {
     forwardCount: number;
     revenueSat: number;
     failedForwardCount: number;
+    missionPairCount: number;
+    missionPairsWithSignals: number;
+    centralityPeerCount: number;
   };
 }
-

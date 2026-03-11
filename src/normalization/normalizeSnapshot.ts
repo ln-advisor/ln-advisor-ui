@@ -13,6 +13,13 @@ interface ChannelAccumulator {
   lastActivityTimestamp: number | null;
 }
 
+interface MissionAccumulator {
+  successCount: number;
+  failCount: number;
+  lastSuccessTimestamp: number | null;
+  lastFailTimestamp: number | null;
+}
+
 const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 const toNumber = (value: NumericLike | undefined | null): number => {
@@ -38,6 +45,8 @@ const toTimestampSeconds = (
   }
   return null;
 };
+
+const normalizePubkey = (value: string): string => String(value || "").trim().toLowerCase();
 
 const roundFixed = (value: number, decimals: number): number => {
   const factor = 10 ** decimals;
@@ -145,6 +154,58 @@ const buildFeeMap = (
   return feeMap;
 };
 
+const buildCentralityMap = (snapshot: LightningSnapshot): Map<string, number> => {
+  const map = new Map<string, number>();
+  for (const metric of snapshot.nodeCentralityMetrics || []) {
+    const pubkey = normalizePubkey(String(metric.nodePubkey || ""));
+    if (!pubkey) continue;
+    map.set(pubkey, toNumber(metric.betweennessCentrality));
+  }
+  return map;
+};
+
+const buildMissionMap = (
+  snapshot: LightningSnapshot,
+  nodePubkey: string
+): Map<string, MissionAccumulator> => {
+  const map = new Map<string, MissionAccumulator>();
+  const node = normalizePubkey(nodePubkey);
+  for (const pair of snapshot.missionControlPairs || []) {
+    const from = normalizePubkey(String(pair.nodeFrom || ""));
+    const to = normalizePubkey(String(pair.nodeTo || ""));
+    if (!from || !to) continue;
+
+    let remotePeer = "";
+    if (node && from === node) remotePeer = to;
+    else if (node && to === node) remotePeer = from;
+    else if (!node) remotePeer = to;
+    else continue;
+
+    if (!remotePeer) continue;
+
+    const successCount = Math.max(0, Math.floor(toNumber(pair.successCount)));
+    const failCount = Math.max(0, Math.floor(toNumber(pair.failCount)));
+    const lastSuccessTimestamp = toTimestampSeconds(undefined, pair.lastSuccessTimestamp);
+    const lastFailTimestamp = toTimestampSeconds(undefined, pair.lastFailTimestamp);
+
+    if (!map.has(remotePeer)) {
+      map.set(remotePeer, {
+        successCount: 0,
+        failCount: 0,
+        lastSuccessTimestamp: null,
+        lastFailTimestamp: null,
+      });
+    }
+
+    const current = map.get(remotePeer)!;
+    current.successCount += successCount;
+    current.failCount += failCount;
+    current.lastSuccessTimestamp = updateActivity(current.lastSuccessTimestamp, lastSuccessTimestamp);
+    current.lastFailTimestamp = updateActivity(current.lastFailTimestamp, lastFailTimestamp);
+  }
+  return map;
+};
+
 export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeState {
   const nodePubkey = String(snapshot.nodeInfo?.identityPubkey || "").trim();
   const nodeAlias = String(snapshot.nodeInfo?.alias || "").trim();
@@ -152,6 +213,8 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
   const channelStats = buildForwardingStats(snapshot);
   buildFailureStats(snapshot, channelStats);
   const feeMap = buildFeeMap(snapshot, nodePubkey);
+  const centralityMap = buildCentralityMap(snapshot);
+  const missionMap = buildMissionMap(snapshot, nodePubkey);
 
   const channels: NormalizedChannelState[] = [...(snapshot.channels || [])]
     .map((channel) => {
@@ -171,6 +234,15 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         lastActivityTimestamp: null,
       };
       const fee = feeMap.get(channelId) || { outboundFeePpm: null, inboundFeePpm: null };
+      const remotePubkey = normalizePubkey(String(channel.remotePubkey || "").trim());
+      const peerCentrality = centralityMap.has(remotePubkey) ? centralityMap.get(remotePubkey)! : null;
+      const mission = missionMap.get(remotePubkey) || {
+        successCount: 0,
+        failCount: 0,
+        lastSuccessTimestamp: null,
+        lastFailTimestamp: null,
+      };
+      const missionTotal = mission.successCount + mission.failCount;
 
       return {
         channelId,
@@ -189,6 +261,14 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         revenueSat: roundFixed(stats.revenueSat, 3),
         failedForwardCount: stats.failedForwardCount,
         lastActivityTimestamp: stats.lastActivityTimestamp,
+        peerBetweennessCentrality:
+          peerCentrality === null ? null : roundFixed(Math.max(0, peerCentrality), 9),
+        missionSuccessRate:
+          missionTotal > 0 ? roundFixed(mission.successCount / missionTotal, 6) : null,
+        missionFailureRate:
+          missionTotal > 0 ? roundFixed(mission.failCount / missionTotal, 6) : null,
+        missionLastSuccessTimestamp: mission.lastSuccessTimestamp,
+        missionLastFailTimestamp: mission.lastFailTimestamp,
       };
     })
     .sort((a, b) => compareText(a.channelId, b.channelId));
@@ -205,34 +285,59 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
       remoteRatioSum: number;
       outboundFeePpmSum: number;
       outboundFeePpmCount: number;
+      peerBetweennessCentralitySum: number;
+      peerBetweennessCentralityCount: number;
       totalForwardCount: number;
       totalRevenueSat: number;
       totalFailedForwardCount: number;
       lastActivityTimestamp: number | null;
+      missionPairCount: number;
+      missionSuccessRate: number | null;
+      missionFailureRate: number | null;
+      missionLastSuccessTimestamp: number | null;
+      missionLastFailTimestamp: number | null;
     }
   >();
 
   for (const channel of channels) {
     const peerPubkey = channel.remotePubkey || "unknown-peer";
     if (!peerMap.has(peerPubkey)) {
-      peerMap.set(peerPubkey, {
-        channelCount: 0,
-        activeChannelCount: 0,
-        totalCapacitySat: 0,
-        totalLocalBalanceSat: 0,
-        totalRemoteBalanceSat: 0,
-        localRatioSum: 0,
-        remoteRatioSum: 0,
-        outboundFeePpmSum: 0,
-        outboundFeePpmCount: 0,
-        totalForwardCount: 0,
-        totalRevenueSat: 0,
-        totalFailedForwardCount: 0,
-        lastActivityTimestamp: null,
-      });
-    }
+        peerMap.set(peerPubkey, {
+          channelCount: 0,
+          activeChannelCount: 0,
+          totalCapacitySat: 0,
+          totalLocalBalanceSat: 0,
+          totalRemoteBalanceSat: 0,
+          localRatioSum: 0,
+          remoteRatioSum: 0,
+          outboundFeePpmSum: 0,
+          outboundFeePpmCount: 0,
+          peerBetweennessCentralitySum: 0,
+          peerBetweennessCentralityCount: 0,
+          totalForwardCount: 0,
+          totalRevenueSat: 0,
+          totalFailedForwardCount: 0,
+          lastActivityTimestamp: null,
+          missionPairCount:
+            channel.missionSuccessRate !== null || channel.missionFailureRate !== null ? 1 : 0,
+          missionSuccessRate: channel.missionSuccessRate,
+          missionFailureRate: channel.missionFailureRate,
+          missionLastSuccessTimestamp: channel.missionLastSuccessTimestamp,
+          missionLastFailTimestamp: channel.missionLastFailTimestamp,
+        });
+      }
 
     const peerAcc = peerMap.get(peerPubkey)!;
+    if (
+      peerAcc.missionPairCount === 0 &&
+      (channel.missionSuccessRate !== null || channel.missionFailureRate !== null)
+    ) {
+      peerAcc.missionPairCount = 1;
+      peerAcc.missionSuccessRate = channel.missionSuccessRate;
+      peerAcc.missionFailureRate = channel.missionFailureRate;
+      peerAcc.missionLastSuccessTimestamp = channel.missionLastSuccessTimestamp;
+      peerAcc.missionLastFailTimestamp = channel.missionLastFailTimestamp;
+    }
     peerAcc.channelCount += 1;
     peerAcc.activeChannelCount += channel.active ? 1 : 0;
     peerAcc.totalCapacitySat += channel.capacitySat;
@@ -243,6 +348,10 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
     if (channel.outboundFeePpm !== null) {
       peerAcc.outboundFeePpmSum += channel.outboundFeePpm;
       peerAcc.outboundFeePpmCount += 1;
+    }
+    if (channel.peerBetweennessCentrality !== null) {
+      peerAcc.peerBetweennessCentralitySum += channel.peerBetweennessCentrality;
+      peerAcc.peerBetweennessCentralityCount += 1;
     }
     peerAcc.totalForwardCount += channel.forwardCountTotal;
     peerAcc.totalRevenueSat += channel.revenueSat;
@@ -273,6 +382,18 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
       totalRevenueSat: roundFixed(peerAcc.totalRevenueSat, 3),
       totalFailedForwardCount: peerAcc.totalFailedForwardCount,
       lastActivityTimestamp: peerAcc.lastActivityTimestamp,
+      avgPeerBetweennessCentrality:
+        peerAcc.peerBetweennessCentralityCount > 0
+          ? roundFixed(
+              peerAcc.peerBetweennessCentralitySum / peerAcc.peerBetweennessCentralityCount,
+              9
+            )
+          : null,
+      missionPairCount: peerAcc.missionPairCount,
+      missionSuccessRate: peerAcc.missionSuccessRate,
+      missionFailureRate: peerAcc.missionFailureRate,
+      missionLastSuccessTimestamp: peerAcc.missionLastSuccessTimestamp,
+      missionLastFailTimestamp: peerAcc.missionLastFailTimestamp,
     }))
     .sort((a, b) => compareText(a.peerPubkey, b.peerPubkey));
 
@@ -284,6 +405,12 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
       acc.forwardCount += channel.forwardCountTotal;
       acc.revenueSat += channel.revenueSat;
       acc.failedForwardCount += channel.failedForwardCount;
+      if (channel.missionSuccessRate !== null || channel.missionFailureRate !== null) {
+        acc.missionPairsWithSignals += 1;
+      }
+      if (channel.peerBetweennessCentrality !== null) {
+        acc.centralityPeerCount += 1;
+      }
       return acc;
     },
     {
@@ -293,6 +420,8 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
       forwardCount: 0,
       revenueSat: 0,
       failedForwardCount: 0,
+      missionPairsWithSignals: 0,
+      centralityPeerCount: 0,
     }
   );
 
@@ -309,7 +438,7 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
     totals: {
       ...totals,
       revenueSat: roundFixed(totals.revenueSat, 3),
+      missionPairCount: missionMap.size,
     },
   };
 }
-

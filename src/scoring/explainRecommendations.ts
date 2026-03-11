@@ -7,7 +7,8 @@ export interface ExplainRequest {
 }
 
 export interface FeeRecommendationExplanation {
-  channelId: string;
+  channelRef: string;
+  peerRef: string;
   action: "raise" | "lower" | "hold";
   explanation: string;
   confidence: number;
@@ -18,13 +19,16 @@ export interface FeeRecommendationExplanation {
     failedForwardPressure: string;
     liquidityImbalance: string;
     currentFeeBand: string;
+    missionReliabilityBand: string;
+    centralityBand: string;
     reasons: string[];
   };
 }
 
 export interface ForwardRankingExplanation {
   rank: number;
-  channelId: string;
+  channelRef: string;
+  peerRef: string;
   explanation: string;
   score: number;
   evidence: {
@@ -33,6 +37,8 @@ export interface ForwardRankingExplanation {
     liquidityBand: string;
     channelPerformanceBand: string;
     peerPerformanceBand: string;
+    missionReliabilityBand: string;
+    centralityBand: string;
   };
 }
 
@@ -72,8 +78,10 @@ const REASON_MAP: Record<string, string> = {
   failed_forward_pressure: "recent failed forwards indicate routing pressure",
   outbound_liquidity_scarce: "outbound liquidity appears scarce",
   outbound_liquidity_excess: "outbound liquidity appears abundant",
-  current_fee_band_low: "the current fee is in the low band",
-  current_fee_band_high: "the current fee is in the high band",
+  mission_reliability_low: "mission-control reliability is low",
+  mission_reliability_high: "mission-control reliability is high",
+  peer_centrality_high: "peer centrality is high",
+  peer_centrality_low: "peer centrality is low",
 };
 
 const humanizeReasons = (reasons: string[]): string[] =>
@@ -98,10 +106,11 @@ const buildFeeExplanation = (
     humanReasons.length > 0 ? humanReasons.join("; ") : "available signals do not strongly favor a change";
 
   return {
-    channelId: recommendation.channelId,
+    channelRef: recommendation.channelRef,
+    peerRef: recommendation.peerRef,
     action: recommendation.action,
     confidence: recommendation.confidence,
-    explanation: `Channel ${recommendation.channelId}: ${actionVerb(recommendation.action)} fee ${feeSentence} because ${reasonsSentence}.`,
+    explanation: `Channel ${recommendation.channelRef}: ${actionVerb(recommendation.action)} fee ${feeSentence} because ${reasonsSentence}.`,
     evidence: {
       currentFeePpm: recommendation.currentFeePpm,
       suggestedFeePpm: recommendation.suggestedFeePpm,
@@ -109,6 +118,8 @@ const buildFeeExplanation = (
       failedForwardPressure: recommendation.signals.failedForwardPressure,
       liquidityImbalance: recommendation.signals.liquidityImbalance,
       currentFeeBand: recommendation.signals.currentFeeBand,
+      missionReliabilityBand: recommendation.signals.missionReliabilityBand,
+      centralityBand: recommendation.signals.centralityBand,
       reasons,
     },
   };
@@ -118,19 +129,23 @@ const buildRankExplanation = (
   ranking: ArbBundle["recommendation"]["forwardOpportunityRanking"][number]
 ): ForwardRankingExplanation => ({
   rank: ranking.rank,
-  channelId: ranking.channelId,
+  channelRef: ranking.channelRef,
+  peerRef: ranking.peerRef,
   score: ranking.score,
   explanation:
-    `Channel ${ranking.channelId} is ranked #${ranking.rank} with score ${ranking.score}. ` +
+    `Channel ${ranking.channelRef} is ranked #${ranking.rank} with score ${ranking.score}. ` +
     `Signals: ${ranking.signals.forwardCount} forwards, ${ranking.signals.recentActivity} recency, ` +
     `${ranking.signals.liquidityBand} liquidity, ${ranking.signals.channelPerformanceBand} channel performance, ` +
-    `${ranking.signals.peerPerformanceBand} peer performance.`,
+    `${ranking.signals.peerPerformanceBand} peer performance, ${ranking.signals.missionReliabilityBand} mission reliability, ` +
+    `${ranking.signals.centralityBand} centrality.`,
   evidence: {
     forwardCount: ranking.signals.forwardCount,
     recentActivity: ranking.signals.recentActivity,
     liquidityBand: ranking.signals.liquidityBand,
     channelPerformanceBand: ranking.signals.channelPerformanceBand,
     peerPerformanceBand: ranking.signals.peerPerformanceBand,
+    missionReliabilityBand: ranking.signals.missionReliabilityBand,
+    centralityBand: ranking.signals.centralityBand,
   },
 });
 
@@ -163,19 +178,19 @@ export function explainRecommendations(
       : 3;
 
   const feeRecommendationExplanations = [...arb.recommendation.feeRecommendations]
-    .sort((a, b) => compareText(a.channelId, b.channelId))
+    .sort((a, b) => compareText(a.channelRef, b.channelRef))
     .map(buildFeeExplanation);
 
   const forwardRankingExplanations = [...arb.recommendation.forwardOpportunityRanking]
-    .sort((a, b) => a.rank - b.rank || compareText(a.channelId, b.channelId))
+    .sort((a, b) => a.rank - b.rank || compareText(a.channelRef, b.channelRef))
     .slice(0, includeTopRanked)
     .map(buildRankExplanation);
 
   const actionCounts = countActions(arb.recommendation.feeRecommendations);
   const topRankedChannels = [...arb.recommendation.forwardOpportunityRanking]
-    .sort((a, b) => a.rank - b.rank || compareText(a.channelId, b.channelId))
+    .sort((a, b) => a.rank - b.rank || compareText(a.channelRef, b.channelRef))
     .slice(0, includeTopRanked)
-    .map((item) => item.channelId);
+    .map((item) => item.channelRef);
 
   return {
     schemaVersion: "recommendations-explained-v1",
@@ -200,4 +215,3 @@ export function explainRecommendations(
     forwardRankingExplanations,
   };
 }
-

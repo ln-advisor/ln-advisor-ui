@@ -1,15 +1,25 @@
 import { createHash } from "node:crypto";
-import type { GraphSnapshotReference, LightningSnapshot } from "../connectors/types";
+import type { GraphSnapshotReference, LightningSnapshot, SnapshotSourceType } from "../connectors/types";
 import type { NormalizedNodeState } from "../normalization/types";
+import type { ArbAttestationEvidence } from "./attestation";
+
+export interface SourceExecutionContext {
+  schemaVersion: "source-execution-context-v1";
+  executionMode: "host_local" | "tee_candidate" | "tee_verified";
+  enclaveProviderId: string | null;
+  attestationHash: string | null;
+}
 
 export interface SourceProvenanceReceipt {
   schemaVersion: "source-provenance-receipt-v1";
-  sourceType: "lnc";
+  sourceType: SnapshotSourceType;
   snapshotTimestamp: string;
   nodeIdentifier: string;
   rawSnapshotHash: string;
   normalizedSnapshotHash: string;
+  privacyTransformedSnapshotHash: string | null;
   graphSnapshotRef: GraphSnapshotReference | null;
+  executionContext: SourceExecutionContext;
 }
 
 const sortObjectKeysDeep = (value: unknown): unknown => {
@@ -50,7 +60,13 @@ const normalizeGraphSnapshotRef = (
 
 export function generateSourceProvenanceReceipt(
   rawSnapshot: LightningSnapshot,
-  normalizedSnapshot: NormalizedNodeState
+  normalizedSnapshot: NormalizedNodeState,
+  options?: {
+    executionMode?: SourceExecutionContext["executionMode"];
+    enclaveProviderId?: string | null;
+    attestation?: ArbAttestationEvidence | null;
+    privacyTransformedSnapshot?: unknown;
+  }
 ): SourceProvenanceReceipt {
   const snapshotTimestamp = String(rawSnapshot.collectedAt || normalizedSnapshot.collectedAt || "").trim();
   if (!snapshotTimestamp) {
@@ -66,12 +82,20 @@ export function generateSourceProvenanceReceipt(
 
   return {
     schemaVersion: "source-provenance-receipt-v1",
-    sourceType: "lnc",
+    sourceType: rawSnapshot.sourceType,
     snapshotTimestamp,
     nodeIdentifier,
     rawSnapshotHash: hashCanonicalJson(rawSnapshot),
     normalizedSnapshotHash: hashCanonicalJson(normalizedSnapshot),
+    privacyTransformedSnapshotHash: options?.privacyTransformedSnapshot
+      ? hashCanonicalJson(options.privacyTransformedSnapshot)
+      : null,
     graphSnapshotRef: normalizeGraphSnapshotRef(rawSnapshot.graphSnapshotRef),
+    executionContext: {
+      schemaVersion: "source-execution-context-v1",
+      executionMode: options?.executionMode ?? "host_local",
+      enclaveProviderId: options?.enclaveProviderId ?? null,
+      attestationHash: options?.attestation ? hashCanonicalJson(options.attestation) : null,
+    },
   };
 }
-

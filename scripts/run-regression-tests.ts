@@ -69,6 +69,11 @@ const buildNormalizedProjection = (normalized: ReturnType<typeof normalizeSnapsh
       revenueSat: channel.revenueSat,
       failedForwardCount: channel.failedForwardCount,
       lastActivityTimestamp: channel.lastActivityTimestamp,
+      peerBetweennessCentrality: channel.peerBetweennessCentrality,
+      missionSuccessRate: channel.missionSuccessRate,
+      missionFailureRate: channel.missionFailureRate,
+      missionLastSuccessTimestamp: channel.missionLastSuccessTimestamp,
+      missionLastFailTimestamp: channel.missionLastFailTimestamp,
     })),
   peers: [...normalized.peers]
     .sort((a, b) => compareText(a.peerPubkey, b.peerPubkey))
@@ -82,6 +87,12 @@ const buildNormalizedProjection = (normalized: ReturnType<typeof normalizeSnapsh
       totalRevenueSat: peer.totalRevenueSat,
       totalFailedForwardCount: peer.totalFailedForwardCount,
       lastActivityTimestamp: peer.lastActivityTimestamp,
+      avgPeerBetweennessCentrality: peer.avgPeerBetweennessCentrality,
+      missionPairCount: peer.missionPairCount,
+      missionSuccessRate: peer.missionSuccessRate,
+      missionFailureRate: peer.missionFailureRate,
+      missionLastSuccessTimestamp: peer.missionLastSuccessTimestamp,
+      missionLastFailTimestamp: peer.missionLastFailTimestamp,
     })),
 });
 
@@ -110,6 +121,9 @@ const buildFeatureProjection = (
         forwardCountTotal: channel.forwardCountTotal,
         revenueSat: channel.revenueSat,
         failedForwardCount: channel.failedForwardCount,
+        peerBetweennessCentrality: channel.peerBetweennessCentrality,
+        missionSuccessRate: channel.missionSuccessRate,
+        missionFailureRate: channel.missionFailureRate,
       })),
     peers: [...featureOnly.peers]
       .sort((a, b) => compareText(a.peerRef, b.peerRef))
@@ -122,6 +136,10 @@ const buildFeatureProjection = (
         totalForwardCount: peer.totalForwardCount,
         totalRevenueSat: peer.totalRevenueSat,
         totalFailedForwardCount: peer.totalFailedForwardCount,
+        avgPeerBetweennessCentrality: peer.avgPeerBetweennessCentrality,
+        missionPairCount: peer.missionPairCount,
+        missionSuccessRate: peer.missionSuccessRate,
+        missionFailureRate: peer.missionFailureRate,
       })),
   };
 };
@@ -146,6 +164,8 @@ const buildBandedProjection = (banded: ReturnType<typeof applyPrivacyPolicy>): J
         channelPerformanceBand: channel.channelPerformanceBand,
         feeCompetitivenessBand: channel.feeCompetitivenessBand,
         failedForwardPressure: channel.failedForwardPressure,
+        missionReliabilityBand: channel.missionReliabilityBand,
+        centralityBand: channel.centralityBand,
       })),
     peers: [...banded.peers]
       .sort((a, b) => compareText(a.peerRef, b.peerRef))
@@ -157,6 +177,8 @@ const buildBandedProjection = (banded: ReturnType<typeof applyPrivacyPolicy>): J
         channelPerformanceBand: peer.channelPerformanceBand,
         feeCompetitivenessBand: peer.feeCompetitivenessBand,
         failedForwardPressure: peer.failedForwardPressure,
+        missionReliabilityBand: peer.missionReliabilityBand,
+        centralityBand: peer.centralityBand,
       })),
   };
 };
@@ -169,15 +191,16 @@ const buildRecommendationProjection = (
   schemaVersion: "expected-recommendation-bundle-v1",
   modelVersion: recommendation.modelVersion,
   feeActions: [...recommendation.feeRecommendations]
-    .sort((a, b) => compareText(a.channelId, b.channelId))
+    .sort((a, b) => compareText(a.channelRef, b.channelRef))
     .map((item) => ({
-      channelId: item.channelId,
+      channelRef: item.channelRef,
+      peerRef: item.peerRef,
       action: item.action,
       suggestedFeePpm: item.suggestedFeePpm,
     })),
   rankingOrder: [...recommendation.forwardOpportunityRanking]
-    .sort((a, b) => a.rank - b.rank || compareText(a.channelId, b.channelId))
-    .map((item) => item.channelId),
+    .sort((a, b) => a.rank - b.rank || compareText(a.channelRef, b.channelRef))
+    .map((item) => item.channelRef),
   arb: {
     arbVersion: arb.arbVersion,
     recommendationType: arb.recommendationType,
@@ -205,9 +228,19 @@ const runScenario = async (scenario: string): Promise<void> => {
   const normalized = normalizeSnapshot(rawSnapshot);
   const featureOnly = applyPrivacyPolicy(normalized, "feature_only");
   const banded = applyPrivacyPolicy(normalized, "banded");
-  const recommendation = scoreNodeState(normalized);
-  const recommendationAgain = scoreNodeState(normalized);
-  const provenance = generateSourceProvenanceReceipt(rawSnapshot, normalized);
+  const recommendation = scoreNodeState(featureOnly, {
+    nodePubkey: normalized.nodePubkey,
+    nodeAlias: normalized.nodeAlias,
+    collectedAt: normalized.collectedAt,
+  });
+  const recommendationAgain = scoreNodeState(featureOnly, {
+    nodePubkey: normalized.nodePubkey,
+    nodeAlias: normalized.nodeAlias,
+    collectedAt: normalized.collectedAt,
+  });
+  const provenance = generateSourceProvenanceReceipt(rawSnapshot, normalized, {
+    privacyTransformedSnapshot: featureOnly,
+  });
   const arb = buildArb({
     recommendation,
     sourceProvenance: provenance,
@@ -260,4 +293,3 @@ main().catch((error) => {
   console.error("Regression test failed.", error);
   process.exitCode = 1;
 });
-

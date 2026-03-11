@@ -1,9 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { telemetryToLightningSnapshot } from "../connectors/frontendTelemetry";
 import { getLightningSnapshot } from "../connectors/lightningSnapshot";
 import { getMockLightningSnapshot } from "../connectors/mockLightningSnapshot";
-import type { LightningSnapshot } from "../connectors/types";
+import type { FrontendTelemetryEnvelope, LightningSnapshot } from "../connectors/types";
 import { normalizeSnapshot } from "../normalization/normalizeSnapshot";
 import type { NormalizedNodeState } from "../normalization/types";
 import {
@@ -16,7 +17,7 @@ import { generateSourceProvenanceReceipt, type SourceProvenanceReceipt } from ".
 import { buildArb, type ArbBundle } from "../arb/buildArb";
 import { verifyArb } from "../arb/verifyArb";
 
-type SnapshotMode = "lnc" | "mock";
+type SnapshotMode = "lnc" | "mock" | "frontend_payload";
 
 interface SnapshotResponse {
   ok: true;
@@ -36,8 +37,10 @@ interface RecommendResponse {
   recommendationPath: string;
   arbPath: string;
   privacyPath: string;
+  provenancePath: string;
   recommendation: ReturnType<typeof scoreNodeState>;
   privacyTransformedNodeState: PrivacyTransformedNodeState;
+  sourceProvenance: SourceProvenanceReceipt;
   arb: ArbBundle;
 }
 
@@ -99,6 +102,13 @@ const toSnapshotMode = (value: unknown): SnapshotMode => {
   return "lnc";
 };
 
+const readFrontendTelemetry = (value: unknown): FrontendTelemetryEnvelope | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const typed = value as Record<string, unknown>;
+  if (typed.schemaVersion !== "frontend-telemetry-envelope-v1") return null;
+  return typed as FrontendTelemetryEnvelope;
+};
+
 const toPrivacyMode = (value: unknown): PrivacyMode => {
   if (typeof value !== "string") return "feature_only";
   const normalized = value.trim().toLowerCase();
@@ -119,13 +129,20 @@ const ensureRelativeArtifactPath = (value: unknown): string => {
   return normalized;
 };
 
-const resolveSnapshot = async (mode: SnapshotMode): Promise<LightningSnapshot> => {
+const resolveSnapshot = async (
+  mode: SnapshotMode,
+  telemetry: FrontendTelemetryEnvelope | null
+): Promise<LightningSnapshot> => {
+  if (telemetry) return telemetryToLightningSnapshot(telemetry);
   if (mode === "mock") return getMockLightningSnapshot();
   return getLightningSnapshot();
 };
 
-const buildSnapshotBundle = async (mode: SnapshotMode): Promise<SnapshotResponse> => {
-  const rawSnapshot = await resolveSnapshot(mode);
+const buildSnapshotBundle = async (
+  mode: SnapshotMode,
+  telemetry: FrontendTelemetryEnvelope | null
+): Promise<SnapshotResponse> => {
+  const rawSnapshot = await resolveSnapshot(mode, telemetry);
   const normalizedSnapshot = normalizeSnapshot(rawSnapshot);
   const provenance = generateSourceProvenanceReceipt(rawSnapshot, normalizedSnapshot);
 
@@ -151,22 +168,43 @@ const buildSnapshotBundle = async (mode: SnapshotMode): Promise<SnapshotResponse
 
 const buildRecommendationBundle = async (
   mode: SnapshotMode,
-  privacyMode: PrivacyMode
+  privacyMode: PrivacyMode,
+  telemetry: FrontendTelemetryEnvelope | null,
+  issuedAtOverride?: string
 ): Promise<RecommendResponse> => {
-  const snapshotBundle = await buildSnapshotBundle(mode);
-  const recommendation = scoreNodeState(snapshotBundle.normalizedSnapshot);
-  const privacyTransformedNodeState = applyPrivacyPolicy(snapshotBundle.normalizedSnapshot, privacyMode);
+  const snapshotBundle = await buildSnapshotBundle(mode, telemetry);
+  const featureOnlyModelInput = applyPrivacyPolicy(snapshotBundle.normalizedSnapshot, "feature_only");
+  const privacyTransformedNodeState =
+    privacyMode === "feature_only"
+      ? featureOnlyModelInput
+      : applyPrivacyPolicy(snapshotBundle.normalizedSnapshot, privacyMode);
+  const recommendation = scoreNodeState(featureOnlyModelInput, {
+    nodePubkey: snapshotBundle.normalizedSnapshot.nodePubkey,
+    nodeAlias: snapshotBundle.normalizedSnapshot.nodeAlias,
+    collectedAt: snapshotBundle.normalizedSnapshot.collectedAt,
+  });
+  const provenance = generateSourceProvenanceReceipt(
+    snapshotBundle.rawSnapshot,
+    snapshotBundle.normalizedSnapshot,
+    {
+      privacyTransformedSnapshot: featureOnlyModelInput,
+    }
+  );
 
   const arb = buildArb({
     recommendation,
-    sourceProvenance: snapshotBundle.provenance,
-    privacyPolicyId: privacyMode,
+    sourceProvenance: provenance,
+    privacyPolicyId: "feature_only",
     devSigningKey: process.env.ARB_DEV_SIGNING_KEY?.trim() || DEFAULT_DEV_SIGNING_KEY,
-    issuedAt: new Date().toISOString(),
+    issuedAt:
+      issuedAtOverride?.trim() ||
+      process.env.ARB_ISSUED_AT?.trim() ||
+      new Date().toISOString(),
   });
 
   const recommendationPath = path.resolve(process.cwd(), "artifacts", "recommendations.v1.json");
   const arbPath = path.resolve(process.cwd(), "artifacts", "recommendation-bundle.arb.json");
+  const provenancePath = path.resolve(process.cwd(), "artifacts", "source-provenance.json");
   const privacyPath = path.resolve(
     process.cwd(),
     "artifacts",
@@ -175,6 +213,7 @@ const buildRecommendationBundle = async (
 
   await writeJsonDeterministic(recommendationPath, recommendation);
   await writeJsonDeterministic(arbPath, arb);
+  await writeJsonDeterministic(provenancePath, provenance);
   await writeJsonDeterministic(privacyPath, privacyTransformedNodeState);
 
   return {
@@ -184,8 +223,10 @@ const buildRecommendationBundle = async (
     recommendationPath,
     arbPath,
     privacyPath,
+    provenancePath,
     recommendation,
     privacyTransformedNodeState,
+    sourceProvenance: provenance,
     arb,
   };
 };
@@ -200,18 +241,19 @@ export function createApiServer(): http.Server {
 
       const url = new URL(req.url || "/", "http://localhost");
       const body = await parseBody(req);
+      const telemetry = readFrontendTelemetry(body.telemetry);
+      const mode = telemetry ? "frontend_payload" : toSnapshotMode(body.mode);
 
       if (url.pathname === "/api/snapshot") {
-        const mode = toSnapshotMode(body.mode);
-        const snapshotResponse = await buildSnapshotBundle(mode);
+        const snapshotResponse = await buildSnapshotBundle(mode, telemetry);
         sendJson(res, 200, snapshotResponse);
         return;
       }
 
       if (url.pathname === "/api/recommend") {
-        const mode = toSnapshotMode(body.mode);
         const privacyMode = toPrivacyMode(body.privacyMode);
-        const recommendResponse = await buildRecommendationBundle(mode, privacyMode);
+        const issuedAt = typeof body.issuedAt === "string" ? body.issuedAt : undefined;
+        const recommendResponse = await buildRecommendationBundle(mode, privacyMode, telemetry, issuedAt);
         sendJson(res, 200, recommendResponse);
         return;
       }
@@ -272,4 +314,3 @@ export function startApiServer(port: number): http.Server {
   server.listen(port);
   return server;
 }
-

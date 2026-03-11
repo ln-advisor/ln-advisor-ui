@@ -24,6 +24,7 @@ const sortObjectKeysDeep = (value: unknown): unknown => {
 async function main(): Promise<void> {
   const rawPathArg = process.argv[2];
   const normalizedPathArg = process.argv[3];
+  const privacyPathArg = process.argv[4];
 
   const rawSnapshotPath = rawPathArg
     ? path.resolve(process.cwd(), rawPathArg)
@@ -32,10 +33,21 @@ async function main(): Promise<void> {
     ? path.resolve(process.cwd(), normalizedPathArg)
     : path.resolve(process.cwd(), "artifacts", "lightning-snapshot.normalized.json");
   const outputPath = path.resolve(process.cwd(), "artifacts", "source-provenance.json");
+  const privacySnapshotPath = privacyPathArg
+    ? path.resolve(process.cwd(), privacyPathArg)
+    : path.resolve(process.cwd(), "artifacts", "node-state.feature-only.json");
 
   const rawSnapshot = JSON.parse(await readFile(rawSnapshotPath, "utf8")) as LightningSnapshot;
   const normalizedSnapshot = JSON.parse(await readFile(normalizedSnapshotPath, "utf8")) as NormalizedNodeState;
-  const receipt = generateSourceProvenanceReceipt(rawSnapshot, normalizedSnapshot);
+  let privacySnapshot: unknown = null;
+  try {
+    privacySnapshot = JSON.parse(await readFile(privacySnapshotPath, "utf8"));
+  } catch {
+    privacySnapshot = null;
+  }
+  const receipt = generateSourceProvenanceReceipt(rawSnapshot, normalizedSnapshot, {
+    privacyTransformedSnapshot: privacySnapshot || undefined,
+  });
 
   await mkdir(path.dirname(outputPath), { recursive: true });
   const deterministicPayload = JSON.stringify(sortObjectKeysDeep(receipt), null, 2);
@@ -43,6 +55,9 @@ async function main(): Promise<void> {
 
   console.log(`Raw snapshot: ${rawSnapshotPath}`);
   console.log(`Normalized snapshot: ${normalizedSnapshotPath}`);
+  if (privacySnapshot) {
+    console.log(`Privacy snapshot: ${privacySnapshotPath}`);
+  }
   console.log(`Saved provenance receipt: ${outputPath}`);
 }
 
@@ -50,4 +65,3 @@ main().catch((error) => {
   console.error("Failed to generate provenance receipt.", error);
   process.exitCode = 1;
 });
-

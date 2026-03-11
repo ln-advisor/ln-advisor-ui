@@ -1,11 +1,17 @@
-import type { NormalizedChannelState, NormalizedNodeState, NormalizedPeerAggregate } from "../normalization/types";
+import type { NormalizedNodeState } from "../normalization/types";
+import {
+  applyPrivacyPolicy,
+  type FeatureOnlyNodeState,
+  type PrivacyTransformedNodeState,
+} from "../privacy/applyPrivacyPolicy";
 
 export type FeeAction = "raise" | "lower" | "hold";
 export type ActivityBand = "HOT" | "WARM" | "COLD";
 export type LevelBand = "LOW" | "MEDIUM" | "HIGH";
 
 export interface FeeRecommendationV1 {
-  channelId: string;
+  channelRef: string;
+  peerRef: string;
   action: FeeAction;
   currentFeePpm: number | null;
   suggestedFeePpm: number | null;
@@ -16,13 +22,16 @@ export interface FeeRecommendationV1 {
     liquidityImbalance: "LOCAL_HEAVY" | "BALANCED" | "REMOTE_HEAVY";
     currentFeeBand: LevelBand | "UNKNOWN";
     forwardCount: number;
+    missionReliabilityBand: LevelBand;
+    centralityBand: LevelBand;
   };
   reasons: string[];
 }
 
 export interface ForwardOpportunityV1 {
   rank: number;
-  channelId: string;
+  channelRef: string;
+  peerRef: string;
   score: number;
   signals: {
     forwardCount: number;
@@ -30,19 +39,29 @@ export interface ForwardOpportunityV1 {
     liquidityBand: LevelBand;
     channelPerformanceBand: LevelBand;
     peerPerformanceBand: LevelBand;
+    missionReliabilityBand: LevelBand;
+    centralityBand: LevelBand;
   };
 }
 
 export interface RecommendationSetV1 {
   schemaVersion: "recommendation-set-v1";
   modelVersion: "fee-forward-v1";
-  sourceSchemaVersion: "normalized-node-state-v1";
+  sourceSchemaVersion: "privacy-node-state-v1";
   nodePubkey: string;
   nodeAlias: string;
   collectedAt: string;
   feeRecommendations: FeeRecommendationV1[];
   forwardOpportunityRanking: ForwardOpportunityV1[];
 }
+
+export interface ScoreNodeStateOptions {
+  nodePubkey?: string;
+  nodeAlias?: string;
+  collectedAt?: string;
+}
+
+type ScoringInput = NormalizedNodeState | FeatureOnlyNodeState;
 
 const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -62,7 +81,9 @@ const percentile = (sortedValues: number[], quantile: number): number => {
   return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
 };
 
-const buildFeeBandThresholds = (channels: NormalizedChannelState[]): { p33: number; p66: number } => {
+const buildFeeBandThresholds = (
+  channels: FeatureOnlyNodeState["channels"]
+): { p33: number; p66: number } => {
   const feeValues = channels
     .map((channel) => channel.outboundFeePpm)
     .filter((fee): fee is number => fee !== null)
@@ -70,6 +91,19 @@ const buildFeeBandThresholds = (channels: NormalizedChannelState[]): { p33: numb
   return {
     p33: percentile(feeValues, 1 / 3),
     p66: percentile(feeValues, 2 / 3),
+  };
+};
+
+const buildCentralityThresholds = (
+  channels: FeatureOnlyNodeState["channels"]
+): { p33: number; p66: number } => {
+  const centralityValues = channels
+    .map((channel) => channel.peerBetweennessCentrality)
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
+  return {
+    p33: percentile(centralityValues, 1 / 3),
+    p66: percentile(centralityValues, 2 / 3),
   };
 };
 
@@ -108,6 +142,29 @@ const classifyPerformanceBand = (score: number): LevelBand => {
   return "HIGH";
 };
 
+const classifyMissionReliabilityBand = (
+  successRate: number | null,
+  failureRate: number | null
+): LevelBand => {
+  if (successRate === null && failureRate === null) return "MEDIUM";
+  const success = successRate ?? 0;
+  const fail = failureRate ?? 0;
+  const score = success - fail;
+  if (score < -0.2) return "LOW";
+  if (score < 0.2) return "MEDIUM";
+  return "HIGH";
+};
+
+const classifyCentralityBand = (
+  centrality: number | null,
+  thresholds: { p33: number; p66: number }
+): LevelBand => {
+  if (centrality === null) return "MEDIUM";
+  if (centrality <= thresholds.p33) return "LOW";
+  if (centrality <= thresholds.p66) return "MEDIUM";
+  return "HIGH";
+};
+
 const suggestFeePpm = (currentFeePpm: number | null, action: FeeAction): number | null => {
   if (currentFeePpm === null) return null;
   const base = Math.max(1, Math.round(currentFeePpm));
@@ -117,24 +174,61 @@ const suggestFeePpm = (currentFeePpm: number | null, action: FeeAction): number 
   return base;
 };
 
-const buildPeerMap = (peers: NormalizedPeerAggregate[]): Map<string, NormalizedPeerAggregate> => {
-  const map = new Map<string, NormalizedPeerAggregate>();
+const toFeatureInput = (
+  nodeState: ScoringInput
+): { featureOnly: FeatureOnlyNodeState; metadata: ScoreNodeStateOptions } => {
+  const typed = nodeState as PrivacyTransformedNodeState | NormalizedNodeState;
+  if ((typed as FeatureOnlyNodeState).privacyMode === "feature_only") {
+    const featureOnly = typed as FeatureOnlyNodeState;
+    return {
+      featureOnly,
+      metadata: {
+        nodePubkey: "",
+        nodeAlias: featureOnly.nodeAlias,
+      },
+    };
+  }
+
+  const normalized = typed as NormalizedNodeState;
+  return {
+    featureOnly: applyPrivacyPolicy(normalized, "feature_only"),
+    metadata: {
+      nodePubkey: normalized.nodePubkey,
+      nodeAlias: normalized.nodeAlias,
+      collectedAt: normalized.collectedAt,
+    },
+  };
+};
+
+const buildPeerMap = (
+  peers: FeatureOnlyNodeState["peers"]
+): Map<string, FeatureOnlyNodeState["peers"][number]> => {
+  const map = new Map<string, FeatureOnlyNodeState["peers"][number]>();
   for (const peer of peers) {
-    map.set(peer.peerPubkey, peer);
+    map.set(peer.peerRef, peer);
   }
   return map;
 };
 
 const buildFeeRecommendation = (
-  channel: NormalizedChannelState,
+  channel: FeatureOnlyNodeState["channels"][number],
   maxActivityTs: number | null,
-  feeThresholds: { p33: number; p66: number }
+  feeThresholds: { p33: number; p66: number },
+  centralityThresholds: { p33: number; p66: number }
 ): FeeRecommendationV1 => {
   const reasons = new Set<string>();
   const recentActivity = classifyRecentActivity(channel.lastActivityTimestamp, maxActivityTs);
   const failedForwardPressure = channel.failedForwardCount > 0 ? "HIGH" : "LOW";
   const liquidityImbalance = classifyLiquidityImbalance(channel.localBalanceRatio);
   const currentFeeBand = classifyFeeBand(channel.outboundFeePpm, feeThresholds);
+  const missionReliabilityBand = classifyMissionReliabilityBand(
+    channel.missionSuccessRate,
+    channel.missionFailureRate
+  );
+  const centralityBand = classifyCentralityBand(
+    channel.peerBetweennessCentrality,
+    centralityThresholds
+  );
 
   let raiseScore = 0;
   let lowerScore = 0;
@@ -153,7 +247,7 @@ const buildFeeRecommendation = (
 
   if (failedForwardPressure === "HIGH") {
     reasons.add("failed_forward_pressure");
-    if (channel.localBalanceRatio < 0.5) {
+    if (liquidityImbalance === "REMOTE_HEAVY") {
       raiseScore += 1;
     } else {
       lowerScore += 1;
@@ -168,13 +262,21 @@ const buildFeeRecommendation = (
     reasons.add("outbound_liquidity_excess");
   }
 
-  if (currentFeeBand === "LOW" && channel.forwardCountTotal > 0) {
-    raiseScore += 1;
-    reasons.add("current_fee_band_low");
-  }
-  if (currentFeeBand === "HIGH" && (recentActivity === "COLD" || channel.forwardCountTotal === 0)) {
+  if (missionReliabilityBand === "LOW") {
     lowerScore += 1;
-    reasons.add("current_fee_band_high");
+    reasons.add("mission_reliability_low");
+  } else if (missionReliabilityBand === "HIGH") {
+    raiseScore += 1;
+    reasons.add("mission_reliability_high");
+  }
+
+  if (centralityBand === "HIGH" && currentFeeBand === "LOW") {
+    raiseScore += 1;
+    reasons.add("peer_centrality_high");
+  }
+  if (centralityBand === "LOW" && currentFeeBand === "HIGH") {
+    lowerScore += 1;
+    reasons.add("peer_centrality_low");
   }
 
   let action: FeeAction = "hold";
@@ -184,10 +286,11 @@ const buildFeeRecommendation = (
     if (scoreDelta <= -2) action = "lower";
   }
 
-  const confidence = roundFixed(Math.min(1, Math.abs(raiseScore - lowerScore) / 4), 3);
+  const confidence = roundFixed(Math.min(1, Math.abs(raiseScore - lowerScore) / 5), 3);
 
   return {
-    channelId: channel.channelId,
+    channelRef: channel.channelRef,
+    peerRef: channel.peerRef,
     action,
     currentFeePpm: channel.outboundFeePpm,
     suggestedFeePpm: suggestFeePpm(channel.outboundFeePpm, action),
@@ -198,44 +301,86 @@ const buildFeeRecommendation = (
       liquidityImbalance,
       currentFeeBand,
       forwardCount: channel.forwardCountTotal,
+      missionReliabilityBand,
+      centralityBand,
     },
     reasons: [...reasons].sort(compareText),
   };
 };
 
-const computePeerPerformanceScore = (peer: NormalizedPeerAggregate | undefined): number => {
+const computePeerPerformanceScore = (
+  peer: FeatureOnlyNodeState["peers"][number] | undefined
+): number => {
   if (!peer) return 0;
+  const missionBoost =
+    classifyMissionReliabilityBand(peer.missionSuccessRate, peer.missionFailureRate) === "HIGH"
+      ? 3
+      : classifyMissionReliabilityBand(peer.missionSuccessRate, peer.missionFailureRate) === "LOW"
+        ? -3
+        : 0;
+  const centralityBoost =
+    peer.avgPeerBetweennessCentrality !== null ? Math.min(peer.avgPeerBetweennessCentrality * 20, 4) : 0;
   const score =
-    Math.min(peer.totalForwardCount, 10) - Math.min(peer.totalFailedForwardCount * 2, 6) + (peer.activeChannelCount > 0 ? 2 : 0);
+    Math.min(peer.totalForwardCount, 10) -
+    Math.min(peer.totalFailedForwardCount * 2, 6) +
+    (peer.activeChannelCount > 0 ? 2 : 0) +
+    missionBoost +
+    centralityBoost;
   return roundFixed(score, 3);
 };
 
 const buildForwardOpportunity = (
-  channel: NormalizedChannelState,
+  channel: FeatureOnlyNodeState["channels"][number],
   maxActivityTs: number | null,
-  peerMap: Map<string, NormalizedPeerAggregate>
+  peerMap: Map<string, FeatureOnlyNodeState["peers"][number]>,
+  centralityThresholds: { p33: number; p66: number }
 ): Omit<ForwardOpportunityV1, "rank"> => {
   const recentActivity = classifyRecentActivity(channel.lastActivityTimestamp, maxActivityTs);
   const liquidityBand = classifyLiquidityBand(channel.localBalanceRatio);
-  const peer = peerMap.get(channel.remotePubkey);
+  const missionReliabilityBand = classifyMissionReliabilityBand(
+    channel.missionSuccessRate,
+    channel.missionFailureRate
+  );
+  const centralityBand = classifyCentralityBand(
+    channel.peerBetweennessCentrality,
+    centralityThresholds
+  );
+  const peer = peerMap.get(channel.peerRef);
 
   const forwardVolumeScore = Math.min(channel.forwardCountTotal, 10) * 4;
-  const recencyScore = recentActivity === "HOT" ? 25 : recentActivity === "WARM" ? 15 : channel.lastActivityTimestamp ? 5 : 0;
-  const liquidityScore = roundFixed(Math.max(0, 20 * (1 - Math.min(Math.abs(channel.localBalanceRatio - 0.5) / 0.5, 1))), 3);
+  const recencyScore =
+    recentActivity === "HOT" ? 25 : recentActivity === "WARM" ? 15 : channel.lastActivityTimestamp ? 5 : 0;
+  const liquidityScore = roundFixed(
+    Math.max(0, 20 * (1 - Math.min(Math.abs(channel.localBalanceRatio - 0.5) / 0.5, 1))),
+    3
+  );
   const channelPerformanceScore = roundFixed(
-    Math.min(channel.revenueSat / 100, 10) + Math.min(channel.forwardCountTotal, 5) - Math.min(channel.failedForwardCount * 3, 9),
+    Math.min(channel.revenueSat / 100, 10) +
+      Math.min(channel.forwardCountTotal, 5) -
+      Math.min(channel.failedForwardCount * 3, 9),
     3
   );
   const peerPerformanceScore = computePeerPerformanceScore(peer);
+  const missionScore =
+    missionReliabilityBand === "HIGH" ? 10 : missionReliabilityBand === "MEDIUM" ? 5 : 0;
+  const centralityScore = centralityBand === "HIGH" ? 8 : centralityBand === "MEDIUM" ? 4 : 1;
   const activeBonus = channel.active ? 5 : 0;
 
   const totalScore = roundFixed(
-    forwardVolumeScore + recencyScore + liquidityScore + channelPerformanceScore + peerPerformanceScore + activeBonus,
+    forwardVolumeScore +
+      recencyScore +
+      liquidityScore +
+      channelPerformanceScore +
+      peerPerformanceScore +
+      missionScore +
+      centralityScore +
+      activeBonus,
     3
   );
 
   return {
-    channelId: channel.channelId,
+    channelRef: channel.channelRef,
+    peerRef: channel.peerRef,
     score: totalScore,
     signals: {
       forwardCount: channel.forwardCountTotal,
@@ -243,12 +388,18 @@ const buildForwardOpportunity = (
       liquidityBand,
       channelPerformanceBand: classifyPerformanceBand(channelPerformanceScore),
       peerPerformanceBand: classifyPerformanceBand(peerPerformanceScore),
+      missionReliabilityBand,
+      centralityBand,
     },
   };
 };
 
-export function scoreNodeState(normalized: NormalizedNodeState): RecommendationSetV1 {
-  const sortedChannels = [...normalized.channels].sort((a, b) => compareText(a.channelId, b.channelId));
+export function scoreNodeState(
+  nodeState: ScoringInput,
+  options?: ScoreNodeStateOptions
+): RecommendationSetV1 {
+  const { featureOnly, metadata } = toFeatureInput(nodeState);
+  const sortedChannels = [...featureOnly.channels].sort((a, b) => compareText(a.channelRef, b.channelRef));
   const maxActivityTs =
     sortedChannels.reduce<number | null>((maxTs, channel) => {
       if (channel.lastActivityTimestamp === null) return maxTs;
@@ -256,18 +407,21 @@ export function scoreNodeState(normalized: NormalizedNodeState): RecommendationS
       return channel.lastActivityTimestamp > maxTs ? channel.lastActivityTimestamp : maxTs;
     }, null) ?? null;
   const feeThresholds = buildFeeBandThresholds(sortedChannels);
-  const peerMap = buildPeerMap(normalized.peers);
+  const centralityThresholds = buildCentralityThresholds(sortedChannels);
+  const peerMap = buildPeerMap(featureOnly.peers);
 
   const feeRecommendations = sortedChannels
-    .map((channel) => buildFeeRecommendation(channel, maxActivityTs, feeThresholds))
-    .sort((a, b) => compareText(a.channelId, b.channelId));
+    .map((channel) =>
+      buildFeeRecommendation(channel, maxActivityTs, feeThresholds, centralityThresholds)
+    )
+    .sort((a, b) => compareText(a.channelRef, b.channelRef));
 
   const ranked = sortedChannels
-    .map((channel) => buildForwardOpportunity(channel, maxActivityTs, peerMap))
+    .map((channel) => buildForwardOpportunity(channel, maxActivityTs, peerMap, centralityThresholds))
     .sort((a, b) => {
       if (a.score > b.score) return -1;
       if (a.score < b.score) return 1;
-      return compareText(a.channelId, b.channelId);
+      return compareText(a.channelRef, b.channelRef);
     });
 
   const forwardOpportunityRanking: ForwardOpportunityV1[] = ranked.map((row, index) => ({
@@ -278,12 +432,11 @@ export function scoreNodeState(normalized: NormalizedNodeState): RecommendationS
   return {
     schemaVersion: "recommendation-set-v1",
     modelVersion: "fee-forward-v1",
-    sourceSchemaVersion: "normalized-node-state-v1",
-    nodePubkey: normalized.nodePubkey,
-    nodeAlias: normalized.nodeAlias,
-    collectedAt: normalized.collectedAt,
+    sourceSchemaVersion: "privacy-node-state-v1",
+    nodePubkey: String(options?.nodePubkey ?? metadata.nodePubkey ?? ""),
+    nodeAlias: String(options?.nodeAlias ?? metadata.nodeAlias ?? featureOnly.nodeAlias ?? ""),
+    collectedAt: String(options?.collectedAt ?? metadata.collectedAt ?? ""),
     feeRecommendations,
     forwardOpportunityRanking,
   };
 }
-

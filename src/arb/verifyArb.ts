@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import type { ArbBundle } from "./buildArb";
+import type { ArbAttestationEvidence } from "./attestation";
 import type { SourceProvenanceReceipt } from "./provenance";
 
 const DEFAULT_DEV_SIGNING_KEY = "arb-dev-signing-key-insecure";
@@ -49,6 +50,44 @@ const isHex64 = (value: unknown): boolean => isNonEmptyString(value) && HEX_64_R
 const parseDateMillis = (value: string): number => {
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : Number.NaN;
+};
+
+const validateAttestation = (attestation: ArbAttestationEvidence | undefined, errors: string[]): void => {
+  if (attestation === undefined) return;
+  if (!attestation || typeof attestation !== "object") {
+    errors.push("attestation must be an object when provided.");
+    return;
+  }
+
+  if (attestation.schemaVersion !== "arb-attestation-evidence-v1") {
+    errors.push("Invalid attestation.schemaVersion.");
+  }
+  if (!isNonEmptyString(attestation.providerId)) {
+    errors.push("attestation.providerId is required.");
+  }
+  if (!["local_dev", "tee_simulated", "tee_verified"].includes(attestation.executionMode)) {
+    errors.push("attestation.executionMode must be local_dev, tee_simulated, or tee_verified.");
+  }
+  if (attestation.quoteFormat !== "simulated_quote") {
+    errors.push("Unsupported attestation.quoteFormat.");
+  }
+  if (!isNonEmptyString(attestation.quote)) {
+    errors.push("attestation.quote is required.");
+  }
+  if (!isHex64(attestation.quoteHash)) {
+    errors.push("attestation.quoteHash must be a 64-char lowercase hex string.");
+  }
+  if (!isHex64(attestation.measurement)) {
+    errors.push("attestation.measurement must be a 64-char lowercase hex string.");
+  }
+  if (!isHex64(attestation.nonce)) {
+    errors.push("attestation.nonce must be a 64-char lowercase hex string.");
+  }
+
+  const issuedMs = parseDateMillis(attestation.issuedAt);
+  if (!Number.isFinite(issuedMs)) {
+    errors.push("attestation.issuedAt must be a valid ISO timestamp.");
+  }
 };
 
 const validateRequiredFields = (arb: ArbBundle, errors: string[]): void => {
@@ -125,6 +164,7 @@ const validateHashConsistency = (
     modelVersion: arb.modelVersion,
     inputHash: arb.inputHash,
     outputHash: arb.outputHash,
+    ...(arb.attestation ? { attestation: arb.attestation } : {}),
     recommendation: arb.recommendation,
   };
   const recomputedDigest = sha256Hex(unsignedBundle);
@@ -137,8 +177,10 @@ const validateHashConsistency = (
     if (provenanceHash !== arb.sourceProvenanceHash) {
       errors.push("sourceProvenanceHash mismatch against provided provenance receipt.");
     }
-    if (sourceProvenance.normalizedSnapshotHash !== arb.inputHash) {
-      errors.push("inputHash mismatch against provided provenance.normalizedSnapshotHash.");
+    const expectedInputHash =
+      sourceProvenance.privacyTransformedSnapshotHash || sourceProvenance.normalizedSnapshotHash;
+    if (expectedInputHash !== arb.inputHash) {
+      errors.push("inputHash mismatch against provided provenance snapshot hash.");
     }
   }
 };
@@ -176,6 +218,7 @@ export function verifyArb(options: VerifyArbOptions): VerifyArbResult {
   }
 
   validateRequiredFields(options.arb, errors);
+  validateAttestation(options.arb.attestation, errors);
   validateRecommendationFields(options.arb, errors);
   validateTimeWindow(options.arb, nowMs, errors);
   validateHashConsistency(options.arb, options.sourceProvenance, errors);
@@ -187,4 +230,3 @@ export function verifyArb(options: VerifyArbOptions): VerifyArbResult {
     warnings,
   };
 }
-

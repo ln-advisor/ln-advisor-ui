@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import type { SourceProvenanceReceipt } from "./provenance";
 import type { RecommendationSetV1 } from "../scoring/scoreNodeState";
+import type { ArbAttestationEvidence } from "./attestation";
 
 export interface ArbSignature {
   algorithm: "hmac-sha256";
@@ -19,6 +20,7 @@ export interface ArbBundle {
   modelVersion: string;
   inputHash: string;
   outputHash: string;
+  attestation?: ArbAttestationEvidence;
   recommendation: RecommendationSetV1;
   signature: ArbSignature;
 }
@@ -28,6 +30,7 @@ export interface BuildArbOptions {
   sourceProvenance: SourceProvenanceReceipt;
   privacyPolicyId: string;
   devSigningKey: string;
+  attestation?: ArbAttestationEvidence;
   issuedAt?: string;
   ttlSeconds?: number;
 }
@@ -91,7 +94,11 @@ export function buildArb(options: BuildArbOptions): ArbBundle {
   const expiresAt = resolveExpiresAt(issuedAt, ttlSeconds);
 
   const sourceProvenanceHash = sha256Hex(options.sourceProvenance);
-  const inputHash = String(options.sourceProvenance.normalizedSnapshotHash || "").trim();
+  const inputHash = String(
+    options.sourceProvenance.privacyTransformedSnapshotHash ||
+      options.sourceProvenance.normalizedSnapshotHash ||
+      ""
+  ).trim();
   if (!inputHash) {
     throw new Error("sourceProvenance.normalizedSnapshotHash is required for ARB inputHash.");
   }
@@ -107,6 +114,7 @@ export function buildArb(options: BuildArbOptions): ArbBundle {
     modelVersion: options.recommendation.modelVersion,
     inputHash,
     outputHash,
+    ...(options.attestation ? { attestation: options.attestation } : {}),
     recommendation: options.recommendation,
   };
 
@@ -123,4 +131,3 @@ export function buildArb(options: BuildArbOptions): ArbBundle {
     },
   };
 }
-

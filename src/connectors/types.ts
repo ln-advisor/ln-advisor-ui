@@ -1,5 +1,7 @@
 export type NumericLike = number | string;
 
+export type SnapshotSourceType = "lnc" | "lnc_frontend_extractor";
+
 export interface LightningNodeInfo {
   identityPubkey?: string;
   alias?: string;
@@ -52,6 +54,26 @@ export interface LightningRoutingFailure {
   [key: string]: unknown;
 }
 
+export interface LightningMissionControlPair {
+  nodeFrom?: string;
+  nodeTo?: string;
+  successCount?: NumericLike;
+  failCount?: NumericLike;
+  successAmtSat?: NumericLike;
+  failAmtSat?: NumericLike;
+  lastSuccessTimestamp?: NumericLike;
+  lastFailTimestamp?: NumericLike;
+  // TODO(step-adjustment): Add additional mission control fields once exact router RPC shape is pinned.
+  [key: string]: unknown;
+}
+
+export interface LightningNodeCentralityMetric {
+  nodePubkey: string;
+  betweennessCentrality?: NumericLike;
+  // TODO(step-adjustment): Add more graph metric types after model versions consume them.
+  [key: string]: unknown;
+}
+
 export interface LightningFeePolicy {
   channelId: string;
   directionPubKey: string;
@@ -91,7 +113,7 @@ export interface GraphSnapshotReference {
 
 export interface LightningSnapshot {
   schemaVersion: "lightning-snapshot-v1";
-  sourceType: "lnc";
+  sourceType: SnapshotSourceType;
   collectedAt: string;
   namespace: string;
   nodeInfo: LightningNodeInfo | null;
@@ -99,7 +121,42 @@ export interface LightningSnapshot {
   forwardingHistory: LightningForwardingEvent[];
   routingFailures: LightningRoutingFailure[];
   feePolicies: LightningFeePolicy[];
+  missionControlPairs?: LightningMissionControlPair[];
+  nodeCentralityMetrics?: LightningNodeCentralityMetric[];
   peers?: LightningPeer[];
   graphSnapshotRef: GraphSnapshotReference | null;
 }
 
+export interface FrontendGraphSnapshot {
+  fetchedAt?: string;
+  includeUnannounced?: boolean;
+  includeAuthProof?: boolean;
+  nodes?: unknown[];
+  edges?: unknown[];
+  [key: string]: unknown;
+}
+
+export interface FrontendMissionControlSnapshot {
+  pairs?: unknown[];
+  [key: string]: unknown;
+}
+
+export interface FrontendNodeMetricsSnapshot {
+  betweennessCentrality?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface FrontendTelemetryEnvelope {
+  schemaVersion: "frontend-telemetry-envelope-v1";
+  collectedAt: string;
+  namespace: string;
+  nodeInfo: unknown | null;
+  channels: unknown[];
+  forwardingHistory: unknown[];
+  routingFailures?: unknown[];
+  feePolicies?: unknown[];
+  peers?: unknown[];
+  graphSnapshot?: FrontendGraphSnapshot | null;
+  missionControl?: FrontendMissionControlSnapshot | null;
+  nodeMetrics?: FrontendNodeMetricsSnapshot | null;
+}

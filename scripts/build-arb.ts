@@ -39,9 +39,9 @@ async function main(): Promise<void> {
   const recommendation = JSON.parse(await readFile(recommendationPath, "utf8")) as RecommendationSetV1;
   const provenance = JSON.parse(await readFile(provenancePath, "utf8")) as SourceProvenanceReceipt;
 
-  const privacyPolicyId = (privacyPolicyArg || process.env.ARB_PRIVACY_POLICY_ID || "full_internal").trim();
+  const privacyPolicyId = (privacyPolicyArg || process.env.ARB_PRIVACY_POLICY_ID || "feature_only").trim();
   const devSigningKey = (process.env.ARB_DEV_SIGNING_KEY || DEFAULT_DEV_SIGNING_KEY).trim();
-  const issuedAtOverride = process.env.ARB_ISSUED_AT?.trim();
+  const issuedAtOverride = process.env.ARB_ISSUED_AT?.trim() || new Date().toISOString();
   const ttlSecondsRaw = process.env.ARB_TTL_SECONDS?.trim();
   const ttlSecondsParsed = ttlSecondsRaw ? Number.parseInt(ttlSecondsRaw, 10) : undefined;
 
@@ -73,4 +73,3 @@ main().catch((error) => {
   console.error("Failed to build ARB.", error);
   process.exitCode = 1;
 });
-
