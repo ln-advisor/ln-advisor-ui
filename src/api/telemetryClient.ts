@@ -33,7 +33,7 @@ export interface RecommendApiRequest {
   issuedAt?: string;
 }
 
-const API_BASE = (import.meta as any)?.env?.VITE_API_BASE_URL || "http://127.0.0.1:8787";
+const API_BASE = (import.meta as any)?.env?.VITE_API_BASE_URL || "";
 
 const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   const response = await fetch(`${API_BASE}${path}`, {

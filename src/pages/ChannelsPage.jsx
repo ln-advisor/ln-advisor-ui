@@ -1,34 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { postRecommend, postSnapshot, buildFrontendTelemetryEnvelope } from '../api/telemetryClient';
 
-const MOCK_RECOMMENDATION_API = async (telemetry) => {
-    return new Promise((resolve) => {
-        setTimeout(() => {
-            console.log('API Received Telemetry:', telemetry);
-
-            // Basic mock logic: if peer is charging a lot less than you are, decrease.
-            // If they are charging a lot more, increase.
-
-            let action = 'Hold';
-            let suggestedPpm = telemetry.myFeeRate || 0;
-            let confidence = 0.85;
-
-            if (telemetry.peerFeeRate && telemetry.myFeeRate) {
-                if (telemetry.peerFeeRate < telemetry.myFeeRate * 0.5) {
-                    action = 'Decrease';
-                    suggestedPpm = Math.floor(telemetry.myFeeRate * 0.8);
-                    confidence = 0.92;
-                } else if (telemetry.peerFeeRate > telemetry.myFeeRate * 1.5) {
-                    action = 'Increase';
-                    suggestedPpm = Math.floor(telemetry.myFeeRate * 1.2);
-                    confidence = 0.88;
-                }
-            }
-
-            resolve({ action, suggestedPpm, confidenceScore: confidence });
-        }, 1500);
-    });
-};
 
 const fmtSats = (n) => {
     const num = Number(n) || 0;
@@ -331,6 +304,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                 <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                     {nodeChannels.length} active channels
                 </div>
+
             </div>
 
             {error && (
@@ -1140,36 +1114,60 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                 <button
                                     onClick={async () => {
                                         setPropsLoading(true);
-                                        const telemetry = {
-                                            channelId: selectedChannel.chanId,
-                                            peerPubkey: selectedChannel.peerPubkey,
-                                            capacity: selectedChannel.capacity,
-                                            localBalance: selectedChannel.local,
-                                            remoteBalance: selectedChannel.remote,
-                                            routingStatsOutMsat: selectedChannel.stats.feeOutMsat,
-                                            routingStatsInMsat: selectedChannel.stats.feeInMsat,
-                                            myFeeRate: getFeeRatePpm(selectedChannel.myPolicy),
-                                            peerFeeRate: getFeeRatePpm(selectedChannel.peerPolicy),
+                                        try {
+                                            const rawTelemetry = {
+                                                nodeInfo: { alias: "Local Advisor Node" }, // MUST provide a node identifier for provenance
+                                                channels: [{
+                                                    chanId: selectedChannel.chanId,
+                                                    remotePubkey: selectedChannel.peerPubkey,
+                                                    capacity: selectedChannel.capacity,
+                                                    localBalance: selectedChannel.local,
+                                                    remoteBalance: selectedChannel.remote,
+                                                }],
+                                                forwardingHistory: [],
+                                                feePolicies: [
+                                                    {
+                                                        channelId: selectedChannel.chanId,
+                                                        directionPubKey: "self", 
+                                                        feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
+                                                    },
+                                                    {
+                                                        channelId: selectedChannel.chanId,
+                                                        directionPubKey: selectedChannel.peerPubkey,
+                                                        feeRatePpm: getFeeRatePpm(selectedChannel.peerPolicy)
+                                                    }
+                                                ],
+                                                // Additional metrics for context
+                                                metadata: {
+                                                    routingStatsOutMsat: selectedChannel.stats.feeOutMsat,
+                                                    routingStatsInMsat: selectedChannel.stats.feeInMsat,
+                                                    networkInAvg: peerFeeStats?.correctedAvg,
+                                                    networkOutAvg: peerOutFeeStats?.correctedAvg,
+                                                },
+                                                peerFeeSeries: { ...peerFeeSeries }
+                                            };
 
-                                            // Detailed Peer Inbound (Fees peer charges other nodes)
-                                            networkInAvg: peerFeeStats?.correctedAvg,
-                                            networkInMin: peerFeeStats?.min,
-                                            networkInMax: peerFeeStats?.max,
-                                            networkInMedian: peerFeeStats?.median,
+                                            setLastTelemetry(rawTelemetry); // Store RAW for metadata display to avoid crash
+                                            const telemetryEnvelope = buildFrontendTelemetryEnvelope(rawTelemetry);
+                                            
+                                            // 1. Post Snapshot (completes the pipeline flow)
+                                            await postSnapshot(telemetryEnvelope);
 
-                                            // Detailed Peer Outbound (Fees other nodes charge peer)
-                                            networkOutAvg: peerOutFeeStats?.correctedAvg,
-                                            networkOutMin: peerOutFeeStats?.min,
-                                            networkOutMax: peerOutFeeStats?.max,
-                                            networkOutMedian: peerOutFeeStats?.median,
+                                            // 2. Post Recommend
+                                            const res = await postRecommend({
+                                                telemetry: telemetryEnvelope,
+                                                privacyMode: 'banded'
+                                            });
 
-                                            // Full raw macro distribution arrays for advanced TEE inference
-                                            peerFeeSeries: { ...peerFeeSeries }
-                                        };
-                                        setLastTelemetry(telemetry);
-                                        const res = await MOCK_RECOMMENDATION_API(telemetry);
-                                        setPropsRecommendation(res);
-                                        setPropsLoading(false);
+                                            if (res && res.recommendation) {
+                                                setPropsRecommendation(res.recommendation);
+                                            }
+                                        } catch (err) {
+                                            console.error('Props pipeline failed:', err);
+                                            setError('Props pipeline failed: ' + (err.message || 'Unknown error'));
+                                        } finally {
+                                            setPropsLoading(false);
+                                        }
                                     }}
                                     disabled={propsLoading}
                                     className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-md ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
@@ -1275,8 +1273,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                     <p className="text-[10px] text-white/30 uppercase tracking-tighter">Detailed Series (Omitted for brevity)</p>
                                                     <pre className="text-white/20 whitespace-pre-wrap">
                                                         {JSON.stringify({
-                                                            incoming: `[${lastTelemetry.peerFeeSeries.incoming.length} items]`,
-                                                            outgoing: `[${lastTelemetry.peerFeeSeries.outgoing.length} items]`
+                                                            incoming: `[${lastTelemetry.peerFeeSeries?.incoming?.length || 0} items]`,
+                                                            outgoing: `[${lastTelemetry.peerFeeSeries?.outgoing?.length || 0} items]`
                                                         }, null, 2)}
                                                     </pre>
                                                 </div>

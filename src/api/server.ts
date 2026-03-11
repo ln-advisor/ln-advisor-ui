@@ -45,7 +45,12 @@ interface RecommendResponse {
 }
 
 const DEFAULT_DEV_SIGNING_KEY = "arb-dev-signing-key-insecure";
-const API_JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
+const API_HEADERS = {
+  "content-type": "application/json; charset=utf-8",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
 
 const sortObjectKeysDeep = (value: unknown): unknown => {
   if (Array.isArray(value)) {
@@ -89,7 +94,7 @@ const parseBody = async (req: http.IncomingMessage): Promise<Record<string, unkn
 };
 
 const sendJson = (res: http.ServerResponse, statusCode: number, payload: unknown): void => {
-  res.writeHead(statusCode, API_JSON_HEADERS);
+  res.writeHead(statusCode, API_HEADERS);
   res.end(JSON.stringify(sortObjectKeysDeep(payload), null, 2));
 };
 
@@ -177,7 +182,7 @@ const buildRecommendationBundle = async (
   const privacyTransformedNodeState =
     privacyMode === "feature_only"
       ? featureOnlyModelInput
-      : applyPrivacyPolicy(snapshotBundle.normalizedSnapshot, privacyMode);
+      : applyPrivacyPolicy(snapshotBundle.normalizedSnapshot, privacyMode as any);
   const recommendation = scoreNodeState(featureOnlyModelInput, {
     nodePubkey: snapshotBundle.normalizedSnapshot.nodePubkey,
     nodeAlias: snapshotBundle.normalizedSnapshot.nodeAlias,
@@ -234,6 +239,12 @@ const buildRecommendationBundle = async (
 export function createApiServer(): http.Server {
   return http.createServer(async (req, res) => {
     try {
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, API_HEADERS);
+        res.end();
+        return;
+      }
+
       if (req.method !== "POST") {
         sendJson(res, 405, { ok: false, error: "Only POST is supported." });
         return;
