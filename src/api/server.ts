@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { GoogleGenAI } from "@google/genai";
 import { telemetryToLightningSnapshot } from "../connectors/frontendTelemetry";
 import { getLightningSnapshot } from "../connectors/lightningSnapshot";
 import { getMockLightningSnapshot } from "../connectors/mockLightningSnapshot";
@@ -282,8 +283,8 @@ export function createApiServer(): http.Server {
           ? arb
           : arbPathValue
             ? (JSON.parse(
-                await readFile(path.resolve(process.cwd(), ensureRelativeArtifactPath(arbPathValue)), "utf8")
-              ) as ArbBundle)
+              await readFile(path.resolve(process.cwd(), ensureRelativeArtifactPath(arbPathValue)), "utf8")
+            ) as ArbBundle)
             : null;
         if (!loadedArb) {
           sendJson(res, 400, { ok: false, error: "Provide arb object or arbPath." });
@@ -294,11 +295,11 @@ export function createApiServer(): http.Server {
           ? provenance
           : provenancePathValue
             ? (JSON.parse(
-                await readFile(
-                  path.resolve(process.cwd(), ensureRelativeArtifactPath(provenancePathValue)),
-                  "utf8"
-                )
-              ) as SourceProvenanceReceipt)
+              await readFile(
+                path.resolve(process.cwd(), ensureRelativeArtifactPath(provenancePathValue)),
+                "utf8"
+              )
+            ) as SourceProvenanceReceipt)
             : undefined;
 
         const verifyResult = verifyArb({
@@ -309,6 +310,50 @@ export function createApiServer(): http.Server {
         });
 
         sendJson(res, 200, verifyResult);
+        return;
+      }
+
+      if (url.pathname === "/api/analyze-gemini") {
+        const telemetry = body.telemetry;
+        const recommendation = body.recommendation;
+
+        if (!telemetry || !recommendation) {
+          sendJson(res, 400, { ok: false, error: "Provide telemetry and recommendation objects." });
+          return;
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          sendJson(res, 500, { ok: false, error: "GEMINI_API_KEY environment variable is not set." });
+          return;
+        }
+
+        const ai = new GoogleGenAI({ apiKey });
+
+        try {
+          const result = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: `
+              You are a Lightning Network expert advisor. 
+              Given the following telemetry data for a channel and the suggested fee recommendation, 
+              evaluate if the recommendation makes sense.
+              
+              Telemetry:
+              ${JSON.stringify(telemetry, null, 2)}
+              
+              Recommendation:
+              ${JSON.stringify(recommendation, null, 2)}
+              
+              Provide a brief analysis (max 3 sentences) explaining why you agree or disagree with the recommendation.
+              Focus on liquidity imbalance, recent forward activity, and peer context.
+            `
+          });
+
+          sendJson(res, 200, { ok: true, analysis: result.text });
+        } catch (err) {
+          console.error("Gemini analysis failed:", err);
+          sendJson(res, 500, { ok: false, error: "Gemini analysis failed: " + (err instanceof Error ? err.message : String(err)) });
+        }
         return;
       }
 

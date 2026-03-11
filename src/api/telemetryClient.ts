@@ -80,3 +80,6 @@ export const postVerify = async <T = unknown>(arb: unknown, sourceProvenance?: u
     arb,
     ...(sourceProvenance ? { sourceProvenance } : {}),
   });
+
+export const postAnalyzeGemini = async <T = unknown>(telemetry: unknown, recommendation: unknown): Promise<T> =>
+  postJson<T>("/api/analyze-gemini", { telemetry, recommendation });

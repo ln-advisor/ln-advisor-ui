@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "dependencies": {
+    "@google/genai": "^1.44.0",
     "@heroicons/react": "^2.2.0",
     "@lightninglabs/lnc-web": "0.3.5-alpha",
     "@tailwindcss/vite": "^4.2.1",
@@ -23,7 +24,7 @@
     "serve": "vite preview",
     "deps:wsl:reset": "bash scripts/fix-wsl-deps.sh",
     "telemetry:test": "tsx scripts/validate-frontend-telemetry.ts --mock",
-    "api": "tsx scripts/start-api.ts",
+    "api": "tsx --env-file=.env scripts/start-api.ts",
     "api:test": "bash scripts/test-api-curl.sh",
     "api:test:internal": "tsx scripts/test-api-telemetry-flow.ts",
     "test": "tsx scripts/run-regression-tests.ts"
