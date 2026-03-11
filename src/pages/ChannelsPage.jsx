@@ -1,6 +1,35 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 
+const MOCK_RECOMMENDATION_API = async (telemetry) => {
+    return new Promise((resolve) => {
+        setTimeout(() => {
+            console.log('API Received Telemetry:', telemetry);
+
+            // Basic mock logic: if peer is charging a lot less than you are, decrease.
+            // If they are charging a lot more, increase.
+
+            let action = 'Hold';
+            let suggestedPpm = telemetry.myFeeRate || 0;
+            let confidence = 0.85;
+
+            if (telemetry.peerFeeRate && telemetry.myFeeRate) {
+                if (telemetry.peerFeeRate < telemetry.myFeeRate * 0.5) {
+                    action = 'Decrease';
+                    suggestedPpm = Math.floor(telemetry.myFeeRate * 0.8);
+                    confidence = 0.92;
+                } else if (telemetry.peerFeeRate > telemetry.myFeeRate * 1.5) {
+                    action = 'Increase';
+                    suggestedPpm = Math.floor(telemetry.myFeeRate * 1.2);
+                    confidence = 0.88;
+                }
+            }
+
+            resolve({ action, suggestedPpm, confidenceScore: confidence });
+        }, 1500);
+    });
+};
+
 const fmtSats = (n) => {
     const num = Number(n) || 0;
     if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
@@ -29,6 +58,12 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
     const [outboundZoom, setOutboundZoom] = useState(null);
     const [peerFeeLoading, setPeerFeeLoading] = useState(false);
     const [peerFeeError, setPeerFeeError] = useState(null);
+
+    // Props Advisor Modal State
+    const [propsLoading, setPropsLoading] = useState(false);
+    const [propsRecommendation, setPropsRecommendation] = useState(null);
+    const [showPayload, setShowPayload] = useState(false);
+    const [lastTelemetry, setLastTelemetry] = useState(null);
 
     // 1. Fetch channel aliases
     useEffect(() => {
@@ -414,8 +449,15 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                     peerPubkey: String(ch.remotePubkey || ch.remote_pubkey || ''),
                                                     myPolicy,
                                                     peerPolicy,
+                                                    capacity,
+                                                    local,
+                                                    remote,
+                                                    stats
                                                 });
                                                 setFeeModalOpen(true);
+                                                setPropsRecommendation(null);
+                                                setShowPayload(false);
+                                                setLastTelemetry(null);
                                             }}
                                         >
                                             <td style={tdStyle}>
@@ -1076,9 +1118,180 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                 );
                             })()}
                         </div>
+
+                        {/* PROPS ADVISOR SECTION */}
+                        <div className="mt-6 rounded-xl overflow-hidden transition-all duration-300"
+                            style={{
+                                backgroundColor: darkMode ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.5)',
+                                border: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`
+                            }}>
+                            <div className="flex items-center justify-between px-5 py-4 border-b bg-black/5" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
+                                <div className="flex items-center gap-3">
+                                    <div className="flex items-center justify-center w-8 h-8 rounded-full" style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))' }}>
+                                        <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <h4 className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>Props Advisor</h4>
+                                        <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Protected intelligence fee optimization</p>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={async () => {
+                                        setPropsLoading(true);
+                                        const telemetry = {
+                                            channelId: selectedChannel.chanId,
+                                            peerPubkey: selectedChannel.peerPubkey,
+                                            capacity: selectedChannel.capacity,
+                                            localBalance: selectedChannel.local,
+                                            remoteBalance: selectedChannel.remote,
+                                            routingStatsOutMsat: selectedChannel.stats.feeOutMsat,
+                                            routingStatsInMsat: selectedChannel.stats.feeInMsat,
+                                            myFeeRate: getFeeRatePpm(selectedChannel.myPolicy),
+                                            peerFeeRate: getFeeRatePpm(selectedChannel.peerPolicy),
+
+                                            // Detailed Peer Inbound (Fees peer charges other nodes)
+                                            networkInAvg: peerFeeStats?.correctedAvg,
+                                            networkInMin: peerFeeStats?.min,
+                                            networkInMax: peerFeeStats?.max,
+                                            networkInMedian: peerFeeStats?.median,
+
+                                            // Detailed Peer Outbound (Fees other nodes charge peer)
+                                            networkOutAvg: peerOutFeeStats?.correctedAvg,
+                                            networkOutMin: peerOutFeeStats?.min,
+                                            networkOutMax: peerOutFeeStats?.max,
+                                            networkOutMedian: peerOutFeeStats?.median,
+
+                                            // Full raw macro distribution arrays for advanced TEE inference
+                                            peerFeeSeries: { ...peerFeeSeries }
+                                        };
+                                        setLastTelemetry(telemetry);
+                                        const res = await MOCK_RECOMMENDATION_API(telemetry);
+                                        setPropsRecommendation(res);
+                                        setPropsLoading(false);
+                                    }}
+                                    disabled={propsLoading}
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-md ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
+                                    style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
+                                >
+                                    {propsLoading ? 'Running Model...' : propsRecommendation ? 'Re-run Analysis' : 'Analyze Channel'}
+                                </button>
+                            </div>
+
+                            {propsRecommendation && (
+                                <div className="p-5 animate-fade-in">
+                                    <div className="flex flex-col md:flex-row items-center gap-6">
+
+                                        <div className="flex-1 w-full space-y-4">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Suggested Action</span>
+                                                <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${propsRecommendation.action === 'Decrease' ? 'bg-rose-500/20 text-rose-500' : propsRecommendation.action === 'Increase' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-blue-500/20 text-blue-500'}`}>
+                                                    {propsRecommendation.action}
+                                                </span>
+                                            </div>
+
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Target Fee Rate</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs line-through opacity-50 font-mono">{getFeeRatePpm(selectedChannel.myPolicy)}</span>
+                                                    <svg className="w-3 h-3 text-white/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                                                    </svg>
+                                                    <span className="font-mono text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{propsRecommendation.suggestedPpm} ppm</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Model Confidence</span>
+                                                <span className="font-mono text-sm text-white/70">{(propsRecommendation.confidenceScore * 100).toFixed(1)}%</span>
+                                            </div>
+                                        </div>
+
+                                        <div className="w-full md:w-px h-px md:h-24 bg-white/10"></div>
+
+                                        <div className="flex-1 w-full">
+                                            <button
+                                                className="w-full py-3 rounded-xl text-sm font-bold shadow-lg transition-all hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-2"
+                                                style={{ background: 'var(--accent-1)', color: '#fff' }}
+                                            >
+                                                <span>Execute via OpenClaw</span>
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                </svg>
+                                            </button>
+                                            <p className="text-center text-[10px] mt-2 opacity-50">Requires Arb Signature Verification</p>
+                                        </div>
+
+                                    </div>
+                                </div>
+                            )}
+
+                            {!propsRecommendation && !propsLoading && (
+                                <div className="p-5 text-sm flex items-center justify-center text-center text-white/40 h-32">
+                                    Click Analyze Channel to bundle the telemetry and request a Fee Policy recommendation from the Props Pipeline.
+                                </div>
+                            )}
+                            {propsLoading && (
+                                <div className="p-5 flex flex-col items-center justify-center h-32 space-y-3">
+                                    <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                                    <p className="text-xs text-indigo-400 font-mono animate-pulse">Running Props Inference Pipeline...</p>
+                                </div>
+                            )}
+
+                            {lastTelemetry && (
+                                <div className="border-t bg-black/10 transition-colors hover:bg-black/20" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
+                                    <button
+                                        className="w-full flex items-center justify-between px-5 py-4 text-sm font-bold transition-all duration-200"
+                                        style={{ color: darkMode ? 'var(--accent-1)' : 'var(--accent-2)' }}
+                                        onClick={() => setShowPayload(!showPayload)}
+                                    >
+                                        <div className="flex items-center gap-2.5">
+                                            <div className="p-1.5 rounded-md bg-white/5 border border-white/5">
+                                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                                                </svg>
+                                            </div>
+                                            View Extraction Metadata
+                                        </div>
+                                        <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold opacity-50">
+                                            {showPayload ? 'Collapse' : 'Expand'}
+                                            <svg className={`w-3 h-3 transform transition-transform duration-300 ${showPayload ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                        </div>
+                                    </button>
+
+                                    {showPayload && (
+                                        <div className="px-5 pb-6 animate-fade-in">
+                                            <div className="bg-black/50 rounded-xl p-5 overflow-x-auto border border-white/10 shadow-inner font-mono text-[11px] leading-relaxed">
+                                                <pre className="text-emerald-400/90 whitespace-pre">
+                                                    {JSON.stringify(lastTelemetry, (key, value) => {
+                                                        if (Array.isArray(value)) return `[Array(${value.length})]`;
+                                                        return value;
+                                                    }, 2)}
+                                                </pre>
+                                                <div className="mt-4 pt-4 border-t border-white/5 space-y-1">
+                                                    <p className="text-[10px] text-white/30 uppercase tracking-tighter">Detailed Series (Omitted for brevity)</p>
+                                                    <pre className="text-white/20 whitespace-pre-wrap">
+                                                        {JSON.stringify({
+                                                            incoming: `[${lastTelemetry.peerFeeSeries.incoming.length} items]`,
+                                                            outgoing: `[${lastTelemetry.peerFeeSeries.outgoing.length} items]`
+                                                        }, null, 2)}
+                                                    </pre>
+                                                </div>
+                                            </div>
+                                            <p className="mt-4 text-[10px] text-white/40 text-center font-medium">This telemetry packet is processed inside a protected TEE inference boundary.</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                        </div>
+
                     </div>
                 </div>
-            , document.body)}
+                , document.body)}
         </div>
     );
 };

@@ -160,11 +160,11 @@ function App() {
       }
 
       const lncInstance = new LNC({ namespace: 'tapvolt' });
-      
+
       // Clear old credentials before setting the new one to ensure no conflict 
       // from a previous session if the user explicitly typed a new pairing phrase
       if (lncInstance.credentials) {
-         lncInstance.credentials.clear();
+        lncInstance.credentials.clear();
       }
 
       lncInstance.credentials.pairingPhrase = trimmedPairingPhrase;
@@ -353,37 +353,37 @@ function App() {
               backdropFilter: 'blur(12px)',
             }}
           >
-          <AppHeader
-            nodeInfo={nodeInfo}
-            nodeChannelsCount={nodeChannels?.length}
-            peersCount={nodePeers?.length}
-            onShowPeers={() => setIsPeersModalOpen(true)}
-          />
+            <AppHeader
+              nodeInfo={nodeInfo}
+              nodeChannelsCount={nodeChannels?.length}
+              peersCount={nodePeers?.length}
+              onShowPeers={() => setIsPeersModalOpen(true)}
+            />
 
-          <NavBar darkMode={darkMode} />
+            <NavBar darkMode={darkMode} />
 
-          <Routes>
-            <Route path="/graph" element={<GraphAnalysisPage lnc={lnc} darkMode={darkMode} />} />
-            <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
-            <Route path="*" element={<Navigate to="/graph" replace />} />
-          </Routes>
+            <Routes>
+              <Route path="/graph" element={<GraphAnalysisPage lnc={lnc} darkMode={darkMode} />} />
+              <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
+              <Route path="*" element={<Navigate to="/graph" replace />} />
+            </Routes>
 
-          <PeersModal
-            isOpen={isPeersModalOpen}
-            onClose={() => setIsPeersModalOpen(false)}
-            peers={nodePeers}
-            darkMode={darkMode}
-            lnc={lnc}
-            onPeerAdded={listPeers}
-          />
+            <PeersModal
+              isOpen={isPeersModalOpen}
+              onClose={() => setIsPeersModalOpen(false)}
+              peers={nodePeers}
+              darkMode={darkMode}
+              lnc={lnc}
+              onPeerAdded={listPeers}
+            />
 
-          <footer
-            className="px-6 py-4 border-t text-center text-xs"
-            style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
-          >
-            <p>LN Advisor Console</p>
-          </footer>
-        </div>
+            <footer
+              className="px-6 py-4 border-t text-center text-xs"
+              style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+            >
+              <p>LN Advisor Console</p>
+            </footer>
+          </div>
         </div>
 
         <style jsx global>{`
