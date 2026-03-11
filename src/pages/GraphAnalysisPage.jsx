@@ -141,15 +141,7 @@ const makeDownload = (filename, obj) => {
     URL.revokeObjectURL(url);
 };
 
-// ── Custom scatter dot coloured by fee rate ───────────────────────────────
-const FeeScatterDot = (props) => {
-    const { cx, cy, payload } = props;
-    const ppm = payload.ppm;
-    let fill = 'var(--accent-1)'; // low fee
-    if (ppm > 1000) fill = 'var(--accent-4)';
-    else if (ppm > 300) fill = 'var(--accent-3)';
-    return <circle cx={cx} cy={cy} r={4} fill={fill} fillOpacity={0.85} stroke="rgba(15,23,42,0.35)" strokeWidth={0.6} />;
-};
+
 
 const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [graph, setGraph] = useState(null);
@@ -160,6 +152,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [rangeDays, setRangeDays] = useState(7);
     const [missionControl, setMissionControl] = useState(null);
     const [missionError, setMissionError] = useState(null);
+    const [nodePubkey, setNodePubkey] = useState(null);
     const [nodeMetrics, setNodeMetrics] = useState(null);
     const [nodeMetricsError, setNodeMetricsError] = useState(null);
     const [includeUnannounced, setIncludeUnannounced] = useState(false);
@@ -259,6 +252,17 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         }
     }, [lnc]);
 
+    const fetchNodeInfo = useCallback(async () => {
+        if (!lnc?.lnd?.lightning?.getInfo) return null;
+        try {
+            const info = await lnc.lnd.lightning.getInfo({});
+            return info?.identityPubkey || info?.identity_pubkey;
+        } catch (e) {
+            console.error('getInfo failed:', e);
+            return null;
+        }
+    }, [lnc]);
+
     const fetchData = useCallback(async () => {
         setIsLoading(true);
         setError(null);
@@ -266,20 +270,22 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         setMissionError(null);
         setNodeMetricsError(null);
         try {
-            const [graphResp, forwardingResp, missionResp, metricsResp] = await Promise.all([
+            const [graphResp, forwardingResp, missionResp, metricsResp, pubkey] = await Promise.all([
                 fetchGraphData(),
                 fetchForwardingData(),
                 fetchMissionControlData(),
                 fetchNodeMetricsData(),
+                fetchNodeInfo(),
             ]);
             if (graphResp) setGraph(graphResp);
             if (Array.isArray(forwardingResp)) setForwardingEvents(forwardingResp);
             if (missionResp) setMissionControl(missionResp);
             if (metricsResp) setNodeMetrics(metricsResp);
+            if (pubkey) setNodePubkey(String(pubkey).toLowerCase());
         } finally {
             setIsLoading(false);
         }
-    }, [fetchGraphData, fetchForwardingData, fetchMissionControlData, fetchNodeMetricsData]);
+    }, [fetchGraphData, fetchForwardingData, fetchMissionControlData, fetchNodeMetricsData, fetchNodeInfo]);
 
     const normalized = useMemo(() => {
         const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
@@ -312,19 +318,14 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             return statsByNode.get(pub);
         };
 
-        const capacities = [];
-        const feeRatePpm = [];
-        const feeBaseMsat = [];
-        const tlDelta = [];
-        let disabledPolicies = 0;
-        let totalPolicies = 0;
+        let totalCapacity = 0;
 
         edges.forEach((e) => {
             const n1 = String(e.node1_pub || e.node1Pub || '').toLowerCase();
             const n2 = String(e.node2_pub || e.node2Pub || '').toLowerCase();
             const cap = toNum(e.capacity);
 
-            if (cap > 0) capacities.push(cap);
+            if (cap > 0) totalCapacity += cap;
 
             if (n1) {
                 const s1 = ensure(n1);
@@ -337,18 +338,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                 s2.adjacentCapacity += cap;
             }
 
-            const policies = [e.node1_policy || e.node1Policy, e.node2_policy || e.node2Policy].filter(Boolean);
-            policies.forEach((p) => {
-                totalPolicies += 1;
-                const disabled = Boolean(getPolicyField(p, 'disabled', 'disabled', false));
-                if (disabled) disabledPolicies += 1;
-                const ppm = toNum(getPolicyField(p, 'feeRateMilliMsat', 'fee_rate_milli_msat', 0));
-                const base = toNum(getPolicyField(p, 'feeBaseMsat', 'fee_base_msat', 0));
-                const tld = toNum(getPolicyField(p, 'timeLockDelta', 'time_lock_delta', 0));
-                feeRatePpm.push(ppm);
-                feeBaseMsat.push(base);
-                tlDelta.push(tld);
-            });
+
         });
 
         const channelById = new Map();
@@ -367,9 +357,8 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
 
         const nodeStats = Array.from(statsByNode.values());
         nodeStats.sort((a, b) => b.channels - a.channels || b.adjacentCapacity - a.adjacentCapacity);
-        const totalCapacity = capacities.reduce((s, v) => s + v, 0);
 
-        return { nodes, edges, nodeByPub, nodeStats, totalCapacity, capacities, feeRatePpm, feeBaseMsat, tlDelta, disabledPolicies, totalPolicies, channelById };
+        return { nodes, edges, nodeByPub, nodeStats, totalCapacity, channelById };
     }, [graph]);
 
     const forwardingSummary = useMemo(() => {
@@ -449,9 +438,19 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
 
         const pairs = Array.isArray(missionControl?.pairs) ? missionControl.pairs : [];
         const now = Date.now() / 1000;
-        const normPairs = pairs.map((p) => {
-            const from = bytesToHex(p.node_from || p.nodeFrom);
-            const to = bytesToHex(p.node_to || p.nodeTo);
+        
+        let validPairs = pairs.map(p => ({
+            raw: p,
+            from: bytesToHex(p.node_from || p.nodeFrom),
+            to: bytesToHex(p.node_to || p.nodeTo)
+        }));
+        
+        if (nodePubkey) {
+            validPairs = validPairs.filter(p => p.from !== nodePubkey && p.to !== nodePubkey);
+        }
+
+        const normPairs = validPairs.map((vp) => {
+            const { raw: p, from, to } = vp;
             const h = p.history || p.pairHistory || {};
             const failTime = toNum(h.fail_time ?? h.failTime);
             const successTime = toNum(h.success_time ?? h.successTime);
@@ -554,7 +553,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             lowPairs,
             topPairsTable,
         };
-    }, [missionControl]);
+    }, [missionControl, nodePubkey]);
 
     const nodeMetricsSummary = useMemo(() => {
         const entries = nodeMetrics?.betweennessCentrality || nodeMetrics?.betweenness_centrality || {};
@@ -572,14 +571,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         const edgeCount = normalized.edges.length;
         const cap = normalized.totalCapacity;
         const avgCap = edgeCount ? cap / edgeCount : 0;
-        const disabledPct = normalized.totalPolicies ? (normalized.disabledPolicies / normalized.totalPolicies) * 100 : 0;
-        const p95 = (arr) => {
-            if (!arr?.length) return 0;
-            const sorted = [...arr].sort((a, b) => a - b);
-            const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95));
-            return sorted[idx];
-        };
-        return { nodeCount, edgeCount, cap, avgCap, feeP95: p95(normalized.feeRatePpm), feeBaseP95: p95(normalized.feeBaseMsat), disabledPct };
+        return { nodeCount, edgeCount, cap, avgCap };
     }, [normalized]);
 
     const chartTheme = useMemo(() => {
@@ -598,61 +590,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             capacity: Math.round(n.adjacentCapacity / 1_000_000), // in M sats
         })), [normalized.nodeStats]);
 
-    const capacityBuckets = useMemo(() => {
-        const buckets = [
-            { label: '<1M', min: 0, max: 1_000_000 },
-            { label: '1–5M', min: 1_000_000, max: 5_000_000 },
-            { label: '5–10M', min: 5_000_000, max: 10_000_000 },
-            { label: '10–50M', min: 10_000_000, max: 50_000_000 },
-            { label: '50–100M', min: 50_000_000, max: 100_000_000 },
-            { label: '≥100M', min: 100_000_000, max: Number.POSITIVE_INFINITY },
-        ];
-        return histogramFromBuckets(normalized.capacities, buckets);
-    }, [normalized.capacities]);
 
-    // Scatter: capacity vs fee rate (sample max 600 points)
-    const scatterData = useMemo(() => {
-        const edges = normalized.edges;
-        const result = [];
-        const step = Math.max(1, Math.floor(edges.length / 600));
-        for (let i = 0; i < edges.length; i += step) {
-            const e = edges[i];
-            const cap = toNum(e.capacity);
-            if (!cap) continue;
-            const policies = [e.node1_policy || e.node1Policy, e.node2_policy || e.node2Policy].filter(Boolean);
-            for (const p of policies) {
-                const ppm = toNum(getPolicyField(p, 'feeRateMilliMsat', 'fee_rate_milli_msat', 0));
-                if (ppm > 100_000) continue; // outlier filter
-                result.push({ cap: Math.round(cap / 1000), ppm });
-            }
-        }
-        return result;
-    }, [normalized.edges]);
-
-    // ComposedChart: fee base msat vs fee rate histogram overlaid
-    const feeComboData = useMemo(() => {
-        const buckets = [
-            { label: '0–100', min: 0, max: 100 },
-            { label: '100–500', min: 100, max: 500 },
-            { label: '500–1k', min: 500, max: 1_000 },
-            { label: '1k–5k', min: 1_000, max: 5_000 },
-            { label: '5k–10k', min: 5_000, max: 10_000 },
-            { label: '≥10k', min: 10_000, max: Number.POSITIVE_INFINITY },
-        ];
-        const hist = histogramFromBuckets(normalized.feeRatePpm, buckets);
-        // compute median fee base per bucket
-        const baseBuckets = buckets.map(b => {
-            const vals = normalized.feeRatePpm.flatMap((ppm, idx) => {
-                const n = toNum(ppm);
-                if (n >= b.min && n < b.max) return [normalized.feeBaseMsat[idx]];
-                return [];
-            }).filter(Boolean).sort((a, b) => a - b);
-            const mid = Math.floor(vals.length / 2);
-            const median = vals.length > 0 ? (vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2) : 0;
-            return Math.round(median);
-        });
-        return hist.map((h, i) => ({ label: h.label, channels: h.count, medianBase: baseBuckets[i] }));
-    }, [normalized.feeRatePpm, normalized.feeBaseMsat]);
 
     const network = useMemo(() => {
         const maxNodes = Math.max(8, Math.min(networkSize, normalized.nodeStats.length));
@@ -872,14 +810,138 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         <StatCard title="Channels" value={kpis.edgeCount.toLocaleString()} darkMode={darkMode} color="var(--accent-1)" />
                         <StatCard title="Total Capacity" value={`${fmtSats(kpis.cap)} sats`} darkMode={darkMode} color="var(--accent-3)"
                             sub={`Avg ${fmtSats(kpis.avgCap)} sats / channel`} />
-                        <StatCard
-                            title="Disabled Policies"
-                            value={`${kpis.disabledPct.toFixed(1)}%`}
-                            darkMode={darkMode}
-                            color={kpis.disabledPct >= 25 ? 'var(--accent-4)' : 'var(--accent-3)'}
-                            sub={`P95 fee: ${Math.round(kpis.feeP95).toLocaleString()} ppm · P95 base: ${Math.round(kpis.feeBaseP95).toLocaleString()} msat`}
-                        />
+                        
                     </div>
+
+                    <ChartCard
+                        title="Peer + channel map"
+                        subtitle="Topology view of the most connected nodes (not to scale)"
+                        darkMode={darkMode}
+                        right={
+                            <div className="flex items-center gap-2">
+                                <select
+                                    value={networkSize}
+                                    onChange={(e) => setNetworkSize(Number(e.target.value))}
+                                    className="px-2 py-1.5 rounded-lg text-xs"
+                                    style={{
+                                        backgroundColor: 'var(--input-bg)',
+                                        border: `1px solid ${darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`,
+                                        color: 'var(--text-primary)',
+                                    }}
+                                >
+                                    <option value={24}>24 nodes</option>
+                                    <option value={36}>36 nodes</option>
+                                    <option value={48}>48 nodes</option>
+                                    <option value={60}>60 nodes</option>
+                                </select>
+                                <label className="text-xs flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer"
+                                    style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)', color: 'var(--text-secondary)' }}>
+                                    <input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} />
+                                    labels
+                                </label>
+                            </div>
+                        }
+                    >
+                        <div className="grid lg:grid-cols-[1.6fr_1fr] gap-4">
+                            <div style={{ width: '100%', height: 460 }}>
+                                <svg viewBox={`0 0 ${network.width} ${network.height}`} width="100%" height="100%">
+                                    <defs>
+                                        <radialGradient id="nodeGlow" cx="50%" cy="50%" r="50%">
+                                            <stop offset="0%" stopColor="rgba(99,102,241,0.7)" />
+                                            <stop offset="100%" stopColor="rgba(99,102,241,0.05)" />
+                                        </radialGradient>
+                                    </defs>
+                                    <rect width="100%" height="100%" fill="transparent" />
+                                    {network.edges.map((e) => {
+                                        const n1 = network.posByPub.get(e.n1);
+                                        const n2 = network.posByPub.get(e.n2);
+                                        if (!n1 || !n2) return null;
+                                        const isActive = focusNode && (e.n1 === focusNode || e.n2 === focusNode);
+                                        const isDim = focusNode && !isActive;
+                                        const width = 0.6 + (e.cap / network.maxCap) * 2.2;
+                                        return (
+                                            <line
+                                                key={`${e.id}-${e.n1}-${e.n2}`}
+                                                x1={n1.x}
+                                                y1={n1.y}
+                                                x2={n2.x}
+                                                y2={n2.y}
+                                                stroke={isActive ? 'var(--accent-2)' : '#94a3b8'}
+                                                strokeOpacity={isDim ? 0.08 : isActive ? 0.6 : 0.25}
+                                                strokeWidth={width}
+                                            />
+                                        );
+                                    })}
+
+                                    {network.nodes.map((n) => {
+                                        const isFocused = focusNode === n.pub_key;
+                                        const isConnected = focusNeighbors ? focusNeighbors.has(n.pub_key) : true;
+                                        const r = 4 + Math.min(10, Math.log2(n.channels + 1));
+                                        return (
+                                            <g key={n.pub_key} onMouseEnter={() => setFocusNode(n.pub_key)} onMouseLeave={() => setFocusNode('')}>
+                                                <circle cx={n.x} cy={n.y} r={r * 2.2} fill="url(#nodeGlow)" opacity={isFocused ? 0.6 : 0.3} />
+                                                <circle
+                                                    cx={n.x}
+                                                    cy={n.y}
+                                                    r={r}
+                                                    fill={isFocused ? 'var(--accent-2)' : 'var(--accent-1)'}
+                                                    fillOpacity={isConnected ? 0.95 : 0.25}
+                                                    stroke="#0f172a"
+                                                    strokeOpacity={darkMode ? 0.5 : 0.15}
+                                                />
+                                                {showLabels && (
+                                                    <text
+                                                        x={n.x}
+                                                        y={n.y - r - 6}
+                                                        textAnchor="middle"
+                                                        fontSize="10"
+                                                        fill={darkMode ? 'rgba(255,255,255,0.7)' : 'rgba(15,23,42,0.65)'}
+                                                    >
+                                                        {n.alias || shortHex(n.pub_key, 8)}
+                                                    </text>
+                                                )}
+                                            </g>
+                                        );
+                                    })}
+                                </svg>
+                            </div>
+                            <div className="space-y-3 text-sm">
+                                <div className="rounded-lg p-3" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
+                                    <p className="text-xs uppercase font-semibold tracking-widest" style={{ color: 'var(--text-secondary)' }}>Focus</p>
+                                    {focusNode ? (
+                                        <>
+                                            <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                                {normalized.nodeByPub.get(focusNode)?.alias || 'Unknown'}
+                                            </p>
+                                            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                                                {shortHex(focusNode, 22)}
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <p style={{ color: 'var(--text-secondary)' }}>Hover a node to inspect its neighborhood.</p>
+                                    )}
+                                </div>
+                                {focusNode && (
+                                    <div className="rounded-lg p-3" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
+                                        <p className="text-xs uppercase font-semibold tracking-widest" style={{ color: 'var(--text-secondary)' }}>Connections</p>
+                                        <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                                            {(focusNeighbors?.size || 1) - 1} adjacent nodes
+                                        </p>
+                                        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                                            Use this to visually spot hubs and clusters for targeted channel strategy.
+                                        </p>
+                                    </div>
+                                )}
+                                <div className="rounded-lg p-3" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
+                                    <p className="text-xs uppercase font-semibold tracking-widest" style={{ color: 'var(--text-secondary)' }}>Legend</p>
+                                    <div className="mt-2 space-y-1">
+                                        <div className="flex items-center gap-2"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: 'var(--accent-1)' }} /><span>Node (size = degree)</span></div>
+                                        <div className="flex items-center gap-2"><span className="inline-block w-3 h-0.5" style={{ background: '#94a3b8' }} /><span>Channel (thickness = capacity)</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </ChartCard>
 
                     {/* Forwarding intelligence */}
                     <ChartCard
@@ -1214,268 +1276,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         </div>
                     )}
 
-                    {/* Row 1: Top nodes + Fee ComposedChart */}
-                    <div className="grid lg:grid-cols-2 gap-4">
-                        <ChartCard
-                            title="Top nodes by channel count"
-                            subtitle="Connectivity (degree) + adjacent capacity in M sats"
-                            darkMode={darkMode}
-                        >
-                            {topNodesByDegree.length === 0 ? (
-                                <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>No data.</div>
-                            ) : (
-                                <div style={{ width: '100%', height: 320 }}>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <ComposedChart data={topNodesByDegree} margin={{ top: 10, right: 20, left: 0, bottom: 60 }}>
-                                            <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
-                                            <XAxis dataKey="label" tick={{ fill: chartTheme.axis, fontSize: 10 }} interval={0} angle={-30} textAnchor="end" height={70} />
-                                            <YAxis yAxisId="left" tick={{ fill: chartTheme.axis, fontSize: 11 }} />
-                                            <YAxis yAxisId="right" orientation="right" tick={{ fill: chartTheme.axis, fontSize: 11 }} />
-                                            <Tooltip
-                                                contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: 10 }}
-                                                labelStyle={{ color: 'var(--text-secondary)' }}
-                                            />
-                                            <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-secondary)', paddingTop: 8 }} />
-                                            <Bar yAxisId="left" dataKey="channels" fill="var(--accent-2)" radius={[6, 6, 0, 0]} name="Channels" />
-                                            <Line yAxisId="right" type="monotone" dataKey="capacity" stroke="var(--accent-3)" dot={false} strokeWidth={2} name="Capacity (M sats)" />
-                                        </ComposedChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            )}
-                        </ChartCard>
-
-                        <ChartCard
-                            title="Fee rate vs. Fee base (policy overview)"
-                            subtitle="Bars = channel count per fee-rate bucket · Line = median fee base (msat)"
-                            darkMode={darkMode}
-                        >
-                            <div style={{ width: '100%', height: 320 }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <ComposedChart data={feeComboData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                                        <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
-                                        <XAxis dataKey="label" tick={{ fill: chartTheme.axis, fontSize: 11 }} />
-                                        <YAxis yAxisId="left" tick={{ fill: chartTheme.axis, fontSize: 11 }} />
-                                        <YAxis yAxisId="right" orientation="right" tick={{ fill: chartTheme.axis, fontSize: 11 }} />
-                                        <Tooltip
-                                            contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: 10 }}
-                                            labelStyle={{ color: 'var(--text-secondary)' }}
-                                        />
-                                        <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-secondary)', paddingTop: 8 }} />
-                                        <Bar yAxisId="left" dataKey="channels" fill="var(--accent-3)" radius={[4, 4, 0, 0]} name="# Channels" />
-                                        <Line yAxisId="right" type="monotone" dataKey="medianBase" stroke="var(--accent-1)" strokeWidth={2} dot={{ r: 3 }} name="Median base (msat)" />
-                                    </ComposedChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </ChartCard>
-                    </div>
-
-                    {/* Row 2: Capacity histogram + Scatter */}
-                    <div className="grid lg:grid-cols-2 gap-4">
-                        <ChartCard
-                            title="Channel capacity distribution"
-                            subtitle="Number of channels per capacity bucket (sats)"
-                            darkMode={darkMode}
-                        >
-                            <div style={{ width: '100%', height: 300 }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={capacityBuckets} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                                        <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
-                                        <XAxis dataKey="label" tick={{ fill: chartTheme.axis, fontSize: 11 }} />
-                                        <YAxis tick={{ fill: chartTheme.axis, fontSize: 11 }} />
-                                        <Tooltip
-                                            contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: 10 }}
-                                            labelStyle={{ color: 'var(--text-secondary)' }}
-                                        />
-                                        <Bar dataKey="count" fill="var(--accent-1)" radius={[6, 6, 0, 0]} name="Channels" />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </ChartCard>
-
-                        <ChartCard
-                            title="Capacity vs. Fee rate (scatter)"
-                            subtitle="Each dot = one channel direction · hover to see exact values"
-                            darkMode={darkMode}
-                            right={
-                                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest"
-                                    style={{ color: 'var(--text-secondary)' }}>
-                                    <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: 'var(--badge-bg)' }}>
-                                        <span className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--accent-1)' }} />
-                                        ≤300 ppm
-                                    </span>
-                                    <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: 'var(--badge-bg)' }}>
-                                        <span className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--accent-3)' }} />
-                                        ≤1k ppm
-                                    </span>
-                                    <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: 'var(--badge-bg)' }}>
-                                        <span className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--accent-4)' }} />
-                                        &gt;1k ppm
-                                    </span>
-                                </div>
-                            }
-                        >
-                            {scatterData.length === 0 ? (
-                                <div className="text-sm h-64 flex items-center justify-center" style={{ color: 'var(--text-secondary)' }}>No policy data available.</div>
-                            ) : (
-                                <div style={{ width: '100%', height: 300 }}>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <ScatterChart margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
-                                            <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
-                                            <XAxis dataKey="cap" name="Capacity (k sats)" type="number" tick={{ fill: chartTheme.axis, fontSize: 10 }}
-                                                label={{ value: 'Cap (k sats)', position: 'insideBottomRight', offset: -10, fill: chartTheme.axis, fontSize: 10 }} />
-                                            <YAxis dataKey="ppm" name="Fee rate (ppm)" type="number" tick={{ fill: chartTheme.axis, fontSize: 10 }}
-                                                label={{ value: 'ppm', angle: -90, position: 'insideLeft', fill: chartTheme.axis, fontSize: 10 }} />
-                                            <ZAxis range={[12, 12]} />
-                                            <Tooltip
-                                                cursor={{ strokeDasharray: '3 3' }}
-                                                wrapperStyle={{ zIndex: 30 }}
-                                                contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: 10 }}
-                                                labelStyle={{ color: 'var(--text-secondary)' }}
-                                                itemStyle={{ color: 'var(--text-primary)' }}
-                                                formatter={(v, name) => {
-                                                    if (name === 'cap') return [`${Number(v).toLocaleString()} k sats`, 'Capacity'];
-                                                    if (name === 'ppm') return [`${Number(v).toLocaleString()} ppm`, 'Fee rate'];
-                                                    return [v, name];
-                                                }}
-                                                labelFormatter={() => 'Channel direction'}
-                                            />
-                                            <Scatter data={scatterData} shape={<FeeScatterDot />} />
-                                        </ScatterChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            )}
-                        </ChartCard>
-                    </div>
-
-                    <ChartCard
-                        title="Peer + channel map"
-                        subtitle="Topology view of the most connected nodes (not to scale)"
-                        darkMode={darkMode}
-                        right={
-                            <div className="flex items-center gap-2">
-                                <select
-                                    value={networkSize}
-                                    onChange={(e) => setNetworkSize(Number(e.target.value))}
-                                    className="px-2 py-1.5 rounded-lg text-xs"
-                                    style={{
-                                        backgroundColor: 'var(--input-bg)',
-                                        border: `1px solid ${darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`,
-                                        color: 'var(--text-primary)',
-                                    }}
-                                >
-                                    <option value={24}>24 nodes</option>
-                                    <option value={36}>36 nodes</option>
-                                    <option value={48}>48 nodes</option>
-                                    <option value={60}>60 nodes</option>
-                                </select>
-                                <label className="text-xs flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer"
-                                    style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)', color: 'var(--text-secondary)' }}>
-                                    <input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} />
-                                    labels
-                                </label>
-                            </div>
-                        }
-                    >
-                        <div className="grid lg:grid-cols-[1.6fr_1fr] gap-4">
-                            <div style={{ width: '100%', height: 460 }}>
-                                <svg viewBox={`0 0 ${network.width} ${network.height}`} width="100%" height="100%">
-                                    <defs>
-                                        <radialGradient id="nodeGlow" cx="50%" cy="50%" r="50%">
-                                            <stop offset="0%" stopColor="rgba(99,102,241,0.7)" />
-                                            <stop offset="100%" stopColor="rgba(99,102,241,0.05)" />
-                                        </radialGradient>
-                                    </defs>
-                                    <rect width="100%" height="100%" fill="transparent" />
-                                    {network.edges.map((e) => {
-                                        const n1 = network.posByPub.get(e.n1);
-                                        const n2 = network.posByPub.get(e.n2);
-                                        if (!n1 || !n2) return null;
-                                        const isActive = focusNode && (e.n1 === focusNode || e.n2 === focusNode);
-                                        const isDim = focusNode && !isActive;
-                                        const width = 0.6 + (e.cap / network.maxCap) * 2.2;
-                                        return (
-                                            <line
-                                                key={`${e.id}-${e.n1}-${e.n2}`}
-                                                x1={n1.x}
-                                                y1={n1.y}
-                                                x2={n2.x}
-                                                y2={n2.y}
-                                                stroke={isActive ? 'var(--accent-2)' : '#94a3b8'}
-                                                strokeOpacity={isDim ? 0.08 : isActive ? 0.6 : 0.25}
-                                                strokeWidth={width}
-                                            />
-                                        );
-                                    })}
-
-                                    {network.nodes.map((n) => {
-                                        const isFocused = focusNode === n.pub_key;
-                                        const isConnected = focusNeighbors ? focusNeighbors.has(n.pub_key) : true;
-                                        const r = 4 + Math.min(10, Math.log2(n.channels + 1));
-                                        return (
-                                            <g key={n.pub_key} onMouseEnter={() => setFocusNode(n.pub_key)} onMouseLeave={() => setFocusNode('')}>
-                                                <circle cx={n.x} cy={n.y} r={r * 2.2} fill="url(#nodeGlow)" opacity={isFocused ? 0.6 : 0.3} />
-                                                <circle
-                                                    cx={n.x}
-                                                    cy={n.y}
-                                                    r={r}
-                                                    fill={isFocused ? 'var(--accent-2)' : 'var(--accent-1)'}
-                                                    fillOpacity={isConnected ? 0.95 : 0.25}
-                                                    stroke="#0f172a"
-                                                    strokeOpacity={darkMode ? 0.5 : 0.15}
-                                                />
-                                                {showLabels && (
-                                                    <text
-                                                        x={n.x}
-                                                        y={n.y - r - 6}
-                                                        textAnchor="middle"
-                                                        fontSize="10"
-                                                        fill={darkMode ? 'rgba(255,255,255,0.7)' : 'rgba(15,23,42,0.65)'}
-                                                    >
-                                                        {n.alias || shortHex(n.pub_key, 8)}
-                                                    </text>
-                                                )}
-                                            </g>
-                                        );
-                                    })}
-                                </svg>
-                            </div>
-                            <div className="space-y-3 text-sm">
-                                <div className="rounded-lg p-3" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
-                                    <p className="text-xs uppercase font-semibold tracking-widest" style={{ color: 'var(--text-secondary)' }}>Focus</p>
-                                    {focusNode ? (
-                                        <>
-                                            <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
-                                                {normalized.nodeByPub.get(focusNode)?.alias || 'Unknown'}
-                                            </p>
-                                            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                                                {shortHex(focusNode, 22)}
-                                            </p>
-                                        </>
-                                    ) : (
-                                        <p style={{ color: 'var(--text-secondary)' }}>Hover a node to inspect its neighborhood.</p>
-                                    )}
-                                </div>
-                                {focusNode && (
-                                    <div className="rounded-lg p-3" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
-                                        <p className="text-xs uppercase font-semibold tracking-widest" style={{ color: 'var(--text-secondary)' }}>Connections</p>
-                                        <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
-                                            {(focusNeighbors?.size || 1) - 1} adjacent nodes
-                                        </p>
-                                        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-                                            Use this to visually spot hubs and clusters for targeted channel strategy.
-                                        </p>
-                                    </div>
-                                )}
-                                <div className="rounded-lg p-3" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
-                                    <p className="text-xs uppercase font-semibold tracking-widest" style={{ color: 'var(--text-secondary)' }}>Legend</p>
-                                    <div className="mt-2 space-y-1">
-                                        <div className="flex items-center gap-2"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: 'var(--accent-1)' }} /><span>Node (size = degree)</span></div>
-                                        <div className="flex items-center gap-2"><span className="inline-block w-3 h-0.5" style={{ background: '#94a3b8' }} /><span>Channel (thickness = capacity)</span></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </ChartCard>
+                    
 
                     {/* Tables */}
                     <div className="rounded-xl overflow-hidden transition-colors duration-300"
