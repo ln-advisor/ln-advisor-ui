@@ -40,6 +40,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
     const [verifyResult, setVerifyResult] = useState(null);
     const [nodeInfo, setNodeInfo] = useState(null);
     const [nodePubkey, setNodePubkey] = useState(null);
+    const [peers, setPeers] = useState([]);
+    const [missionControl, setMissionControl] = useState(null);
 
     // 1. Fetch channel aliases
     useEffect(() => {
@@ -115,6 +117,41 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
         };
 
         fetchAllForwards();
+    }, [lnc]);
+
+    // 3. Fetch peers and mission control for context
+    useEffect(() => {
+        if (!lnc?.lnd?.lightning) return;
+
+        const fetchContext = async () => {
+            try {
+                const [pRes, mcRes] = await Promise.all([
+                    lnc.lnd.lightning.listPeers({}),
+                    lnc.lnd.router ? lnc.lnd.router.queryMissionControl({}) : Promise.resolve({ pairs: [] })
+                ]);
+                setPeers(Array.isArray(pRes?.peers) ? pRes.peers : []);
+                setMissionControl(mcRes);
+            } catch (err) {
+                console.error('Failed to fetch peers/MC for channels page:', err);
+            }
+        };
+
+        fetchContext();
+    }, [lnc]);
+
+    // 4. Fetch local node info to get identity pubkey (required for suggested fees)
+    useEffect(() => {
+        if (!lnc?.lnd?.lightning) return;
+        const fetchNodeInfo = async () => {
+            try {
+                const info = await lnc.lnd.lightning.getInfo({});
+                setNodeInfo(info);
+                setNodePubkey(info.identity_pubkey || info.identityPubkey);
+            } catch (err) {
+                console.error('Failed to fetch local node info:', err);
+            }
+        };
+        fetchNodeInfo();
     }, [lnc]);
 
     // 3. Compute stats per channel
@@ -1119,7 +1156,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                         setPropsLoading(true);
                                         try {
                                             const rawTelemetry = {
-                                                nodeInfo: nodeInfo ? { 
+                                                nodeInfo: nodeInfo ? {
                                                     alias: nodeInfo.alias,
                                                     identityPubkey: nodePubkey
                                                 } : { alias: "Local Advisor Node" },
@@ -1131,14 +1168,23 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                     remoteBalance: selectedChannel.remote || 0,
                                                     active: true // Selected channel is active by definition if we are here
                                                 }],
-                                                forwardingHistory: forwards.filter(f => 
-                                                    String(f.chanIdIn) === String(selectedChannel.chanId) || 
-                                                    String(f.chanIdOut) === String(selectedChannel.chanId)
-                                                ),
+                                                forwardingHistory: forwards.filter(f => {
+                                                    const timestamp = Number(f.timestamp || 0);
+                                                    const fourteenDaysAgo = Math.floor((Date.now() - 14 * 24 * 60 * 60 * 1000) / 1000);
+                                                    const isRecent = timestamp >= fourteenDaysAgo;
+                                                    const isSelectedChannel = String(f.chanIdIn || f.chan_id_in) === String(selectedChannel.chanId) ||
+                                                                            String(f.chanIdOut || f.chan_id_out) === String(selectedChannel.chanId);
+                                                    return isRecent && isSelectedChannel;
+                                                }),
+                                                peers: peers.filter(p => (p.pub_key || p.pubKey) === selectedChannel.peerPubkey),
+                                                missionControl: missionControl ? {
+                                                    ...missionControl,
+                                                    pairs: (missionControl.pairs || []).filter(p => p.destination === selectedChannel.peerPubkey)
+                                                } : null,
                                                 feePolicies: [
                                                     {
                                                         channelId: selectedChannel.chanId,
-                                                        directionPubKey: nodePubkey || "self", 
+                                                        directionPubKey: nodePubkey || "self",
                                                         feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
                                                     },
                                                     {
@@ -1147,19 +1193,19 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                         feeRatePpm: getFeeRatePpm(selectedChannel.peerPolicy)
                                                     }
                                                 ],
-                                                // Additional metrics for context
                                                 metadata: {
                                                     routingStatsOutMsat: selectedChannel.stats.feeOutMsat,
                                                     routingStatsInMsat: selectedChannel.stats.feeInMsat,
                                                     networkInAvg: peerFeeStats?.correctedAvg,
                                                     networkOutAvg: peerOutFeeStats?.correctedAvg,
+                                                    focusChannelId: selectedChannel.chanId
                                                 },
                                                 peerFeeSeries: { ...peerFeeSeries }
                                             };
 
                                             setLastTelemetry(rawTelemetry); // Store RAW for metadata display to avoid crash
                                             const telemetryEnvelope = buildFrontendTelemetryEnvelope(rawTelemetry);
-                                            
+
                                             // 1. Post Snapshot (completes the pipeline flow)
                                             await postSnapshot(telemetryEnvelope);
 
@@ -1171,11 +1217,11 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
 
                                             if (res && res.recommendation && res.recommendation.feeRecommendations && res.recommendation.feeRecommendations.length > 0) {
                                                 // Since we only sent one channel, it should be the only one or we find it
-                                                const rec = res.recommendation.feeRecommendations.find(r => r.channelRef === `channel_0001` || r.channelId === selectedChannel.chanId) 
-                                                          || res.recommendation.feeRecommendations[0];
-                                                
+                                                const rec = res.recommendation.feeRecommendations.find(r => r.channelRef === `channel_0001` || r.channelId === selectedChannel.chanId)
+                                                    || res.recommendation.feeRecommendations[0];
+
                                                 setPropsRecommendation(rec);
-                                                
+
                                                 // 3. Post Verify (Full pipeline)
                                                 try {
                                                     const vRes = await postVerify(res.arb, res.sourceProvenance);
@@ -1203,7 +1249,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                             {propsRecommendation && (
                                 <div className="p-5 animate-fade-in space-y-6">
                                     <div className="flex flex-col md:flex-row items-start gap-6">
-                                        
+
                                         <div className="flex-1 w-full space-y-4">
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Suggested Action</span>
@@ -1213,7 +1259,10 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                             ARB Verified
                                                         </span>
                                                     )}
-                                                    <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${propsRecommendation.action?.toLowerCase() === 'decrease' ? 'bg-rose-500/20 text-rose-500' : propsRecommendation.action?.toLowerCase() === 'increase' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-blue-500/20 text-blue-500'}`}>
+                                                    <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${propsRecommendation.action?.toLowerCase() === 'lower' || propsRecommendation.action?.toLowerCase() === 'decrease' ? 'bg-rose-500/20 text-rose-500' :
+                                                            propsRecommendation.action?.toLowerCase() === 'raise' || propsRecommendation.action?.toLowerCase() === 'increase' ? 'bg-emerald-500/20 text-emerald-500' :
+                                                                'bg-blue-500/20 text-blue-500'
+                                                        }`}>
                                                         {propsRecommendation.action}
                                                     </span>
                                                 </div>
@@ -1221,14 +1270,26 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
 
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Target Fee Rate</span>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-xs line-through opacity-50 font-mono">{getFeeRatePpm(selectedChannel.myPolicy)}</span>
-                                                    <svg className="w-3 h-3 text-white/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                                                    </svg>
-                                                    <span className="font-mono text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-                                                        {propsRecommendation.suggestedFeePpm !== null ? `${propsRecommendation.suggestedFeePpm} ppm` : 'Hold Current'}
-                                                    </span>
+                                                <div className="flex items-center gap-3">
+                                                    {(() => {
+                                                        const currentFee = getFeeRatePpm(selectedChannel.myPolicy);
+                                                        const suggestedFee = propsRecommendation.suggestedFeePpm;
+                                                        const hasChange = suggestedFee !== null && Number(suggestedFee) !== Number(currentFee);
+
+                                                        return (
+                                                            <>
+                                                                <span className={`text-sm font-mono ${hasChange ? 'text-rose-500 font-bold' : 'opacity-50'}`}>
+                                                                    {currentFee} ppm
+                                                                </span>
+                                                                <svg className="w-4 h-4 text-white/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                                                                </svg>
+                                                                <span className="font-mono text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                                                                    {suggestedFee !== null ? `${suggestedFee} ppm` : '1 ppm'}
+                                                                </span>
+                                                            </>
+                                                        );
+                                                    })()}
                                                 </div>
                                             </div>
 
@@ -1252,15 +1313,17 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 ))}
                                             </div>
                                         </div>
-                                        <div className="space-y-2">
-                                            <h4 className="text-[10px] uppercase tracking-widest font-bold text-white/30">Market Signals</h4>
-                                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                                                {propsRecommendation.signals && Object.entries(propsRecommendation.signals).map(([key, value], idx) => (
-                                                    <div key={idx} className="flex justify-between items-center text-[10px]">
-                                                        <span className="text-white/30 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
-                                                        <span className="text-white/70 font-mono">{String(value)}</span>
-                                                    </div>
-                                                ))}
+                                        <div className="space-y-4">
+                                            <div className="space-y-2">
+                                                <h4 className="text-[10px] uppercase tracking-widest font-bold text-white/30">Market Signals</h4>
+                                                <div className="grid grid-cols-1 gap-y-1.5">
+                                                    {propsRecommendation.signals && Object.entries(propsRecommendation.signals).map(([key, value], idx) => (
+                                                        <div key={idx} className="flex justify-between items-center text-[11px]">
+                                                            <span className="text-white/30 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
+                                                            <span className="text-white/70 font-mono font-bold uppercase">{String(value)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
