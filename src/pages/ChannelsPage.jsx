@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { postRecommend, postSnapshot, buildFrontendTelemetryEnvelope } from '../api/telemetryClient';
+import { postRecommend, postSnapshot, buildFrontendTelemetryEnvelope, postVerify } from '../api/telemetryClient';
 
 
 const fmtSats = (n) => {
@@ -37,6 +37,9 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
     const [propsRecommendation, setPropsRecommendation] = useState(null);
     const [showPayload, setShowPayload] = useState(false);
     const [lastTelemetry, setLastTelemetry] = useState(null);
+    const [verifyResult, setVerifyResult] = useState(null);
+    const [nodeInfo, setNodeInfo] = useState(null);
+    const [nodePubkey, setNodePubkey] = useState(null);
 
     // 1. Fetch channel aliases
     useEffect(() => {
@@ -1116,19 +1119,26 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                         setPropsLoading(true);
                                         try {
                                             const rawTelemetry = {
-                                                nodeInfo: { alias: "Local Advisor Node" }, // MUST provide a node identifier for provenance
+                                                nodeInfo: nodeInfo ? { 
+                                                    alias: nodeInfo.alias,
+                                                    identityPubkey: nodePubkey
+                                                } : { alias: "Local Advisor Node" },
                                                 channels: [{
-                                                    chanId: selectedChannel.chanId,
-                                                    remotePubkey: selectedChannel.peerPubkey,
-                                                    capacity: selectedChannel.capacity,
-                                                    localBalance: selectedChannel.local,
-                                                    remoteBalance: selectedChannel.remote,
+                                                    chanId: String(selectedChannel.chanId || ''),
+                                                    remotePubkey: selectedChannel.peerPubkey || '',
+                                                    capacity: selectedChannel.capacity || 0,
+                                                    localBalance: selectedChannel.local || 0,
+                                                    remoteBalance: selectedChannel.remote || 0,
+                                                    active: true // Selected channel is active by definition if we are here
                                                 }],
-                                                forwardingHistory: [],
+                                                forwardingHistory: forwards.filter(f => 
+                                                    String(f.chanIdIn) === String(selectedChannel.chanId) || 
+                                                    String(f.chanIdOut) === String(selectedChannel.chanId)
+                                                ),
                                                 feePolicies: [
                                                     {
                                                         channelId: selectedChannel.chanId,
-                                                        directionPubKey: "self", 
+                                                        directionPubKey: nodePubkey || "self", 
                                                         feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
                                                     },
                                                     {
@@ -1153,14 +1163,27 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                             // 1. Post Snapshot (completes the pipeline flow)
                                             await postSnapshot(telemetryEnvelope);
 
-                                            // 2. Post Recommend
+                                            // 2. Post Recommend (using feature_only as requested)
                                             const res = await postRecommend({
                                                 telemetry: telemetryEnvelope,
-                                                privacyMode: 'banded'
+                                                privacyMode: 'feature_only'
                                             });
 
-                                            if (res && res.recommendation) {
-                                                setPropsRecommendation(res.recommendation);
+                                            if (res && res.recommendation && res.recommendation.feeRecommendations && res.recommendation.feeRecommendations.length > 0) {
+                                                // Since we only sent one channel, it should be the only one or we find it
+                                                const rec = res.recommendation.feeRecommendations.find(r => r.channelRef === `channel_0001` || r.channelId === selectedChannel.chanId) 
+                                                          || res.recommendation.feeRecommendations[0];
+                                                
+                                                setPropsRecommendation(rec);
+                                                
+                                                // 3. Post Verify (Full pipeline)
+                                                try {
+                                                    const vRes = await postVerify(res.arb, res.sourceProvenance);
+                                                    setVerifyResult(vRes);
+                                                } catch (vErr) {
+                                                    console.warn('ARB Verification failed:', vErr);
+                                                    setVerifyResult({ ok: false, error: vErr.message });
+                                                }
                                             }
                                         } catch (err) {
                                             console.error('Props pipeline failed:', err);
@@ -1178,15 +1201,22 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                             </div>
 
                             {propsRecommendation && (
-                                <div className="p-5 animate-fade-in">
-                                    <div className="flex flex-col md:flex-row items-center gap-6">
-
+                                <div className="p-5 animate-fade-in space-y-6">
+                                    <div className="flex flex-col md:flex-row items-start gap-6">
+                                        
                                         <div className="flex-1 w-full space-y-4">
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Suggested Action</span>
-                                                <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${propsRecommendation.action === 'Decrease' ? 'bg-rose-500/20 text-rose-500' : propsRecommendation.action === 'Increase' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-blue-500/20 text-blue-500'}`}>
-                                                    {propsRecommendation.action}
-                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    {verifyResult?.ok && (
+                                                        <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-bold uppercase tracking-widest">
+                                                            ARB Verified
+                                                        </span>
+                                                    )}
+                                                    <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${propsRecommendation.action?.toLowerCase() === 'decrease' ? 'bg-rose-500/20 text-rose-500' : propsRecommendation.action?.toLowerCase() === 'increase' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-blue-500/20 text-blue-500'}`}>
+                                                        {propsRecommendation.action}
+                                                    </span>
+                                                </div>
                                             </div>
 
                                             <div className="flex items-center justify-between">
@@ -1196,31 +1226,43 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                     <svg className="w-3 h-3 text-white/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                                                     </svg>
-                                                    <span className="font-mono text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{propsRecommendation.suggestedPpm} ppm</span>
+                                                    <span className="font-mono text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+                                                        {propsRecommendation.suggestedFeePpm !== null ? `${propsRecommendation.suggestedFeePpm} ppm` : 'Hold Current'}
+                                                    </span>
                                                 </div>
                                             </div>
 
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Model Confidence</span>
-                                                <span className="font-mono text-sm text-white/70">{(propsRecommendation.confidenceScore * 100).toFixed(1)}%</span>
+                                                <span className="font-mono text-sm text-white/70">{((propsRecommendation.confidence || 0) * 100).toFixed(1)}%</span>
                                             </div>
                                         </div>
 
-                                        <div className="w-full md:w-px h-px md:h-24 bg-white/10"></div>
+                                    </div>
 
-                                        <div className="flex-1 w-full">
-                                            <button
-                                                className="w-full py-3 rounded-xl text-sm font-bold shadow-lg transition-all hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-2"
-                                                style={{ background: 'var(--accent-1)', color: '#fff' }}
-                                            >
-                                                <span>Execute via OpenClaw</span>
-                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                                </svg>
-                                            </button>
-                                            <p className="text-center text-[10px] mt-2 opacity-50">Requires Arb Signature Verification</p>
+                                    {/* Reasons & Signals section */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-white/10">
+                                        <div className="space-y-2">
+                                            <h4 className="text-[10px] uppercase tracking-widest font-bold text-white/30">Analysis Reasons</h4>
+                                            <div className="flex flex-wrap gap-2">
+                                                {propsRecommendation.reasons?.map((reason, idx) => (
+                                                    <span key={idx} className="px-2 py-0.5 rounded bg-white/5 border border-white/5 text-[10px] text-white/60 capitalize">
+                                                        {reason.replace(/_/g, ' ')}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
-
+                                        <div className="space-y-2">
+                                            <h4 className="text-[10px] uppercase tracking-widest font-bold text-white/30">Market Signals</h4>
+                                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                                {propsRecommendation.signals && Object.entries(propsRecommendation.signals).map(([key, value], idx) => (
+                                                    <div key={idx} className="flex justify-between items-center text-[10px]">
+                                                        <span className="text-white/30 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
+                                                        <span className="text-white/70 font-mono">{String(value)}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
