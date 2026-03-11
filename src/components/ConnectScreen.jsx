@@ -12,6 +12,7 @@ const ConnectScreen = ({
   isConnecting,
   handleConnect,
   handleLogin,
+  onShowPairing,
   connectionError,
   isPaired,
   onPreview
@@ -157,6 +158,20 @@ const ConnectScreen = ({
                 : 'Connect & Save Session'}
           </button>
         </form>
+
+        {isPaired && (
+          <div className="mt-4 text-center">
+            <button
+              type="button"
+              onClick={onShowPairing}
+              className="text-sm transition-colors duration-200"
+              style={{ color: 'var(--accent-4)' }}
+              disabled={isConnecting}
+            >
+              Connect a different node
+            </button>
+          </div>
+        )}
 
         <FeedbackMessage
           type="error"

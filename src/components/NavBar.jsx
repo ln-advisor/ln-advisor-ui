@@ -46,6 +46,31 @@ const NavBar = ({ darkMode }) => {
         </svg>
         Node Analysis
       </NavLink>
+
+      <NavLink
+        to="/channels"
+        className={({ isActive }) =>
+          isActive
+            ? `${activeCls} text-white`
+            : `${activeCls} hover:opacity-80`
+        }
+        style={({ isActive }) =>
+          isActive
+            ? {
+              background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))',
+              color: '#ffffff',
+              boxShadow: darkMode
+                ? '0 8px 20px rgba(34,211,238,0.25)'
+                : '0 8px 20px rgba(37,99,235,0.2)',
+            }
+            : { color: 'var(--text-secondary)', background: 'transparent' }
+        }
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+        Channels Fees
+      </NavLink>
     </nav>
   );
 };

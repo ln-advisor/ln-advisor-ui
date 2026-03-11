@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { XMarkIcon, PlusCircleIcon, ArrowPathIcon } from '@heroicons/react/24/solid'; // Added PlusCircleIcon, ArrowPathIcon
 
 const PeersModal = ({ isOpen, onClose, peers, darkMode, lnc, onPeerAdded }) => { // Added lnc and onPeerAdded props
@@ -71,7 +72,7 @@ const PeersModal = ({ isOpen, onClose, peers, darkMode, lnc, onPeerAdded }) => {
     }
   };
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75 transition-opacity duration-300 ease-in-out"
       onClick={onClose}
@@ -207,7 +208,7 @@ const PeersModal = ({ isOpen, onClose, peers, darkMode, lnc, onPeerAdded }) => {
         </div>
       </div>
     </div>
-  );
+  , document.body);
 };
 
 export default PeersModal;

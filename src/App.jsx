@@ -16,6 +16,7 @@ import PeersModal from './components/PeersModal';
 import DemoGraphAnalysis from './components/DemoGraphAnalysis';
 
 import GraphAnalysisPage from './pages/GraphAnalysisPage';
+import ChannelsPage from './pages/ChannelsPage';
 
 function App() {
   // LNC & Node State
@@ -159,6 +160,13 @@ function App() {
       }
 
       const lncInstance = new LNC({ namespace: 'tapvolt' });
+      
+      // Clear old credentials before setting the new one to ensure no conflict 
+      // from a previous session if the user explicitly typed a new pairing phrase
+      if (lncInstance.credentials) {
+         lncInstance.credentials.clear();
+      }
+
       lncInstance.credentials.pairingPhrase = trimmedPairingPhrase;
       await lncInstance.connect();
       // Verify node connectivity before persisting encrypted credentials.
@@ -304,6 +312,7 @@ function App() {
         isConnecting={isConnecting}
         handleConnect={handleConnect}
         handleLogin={handleLogin}
+        onShowPairing={() => setIsPaired(false)}
         connectionError={connectionError}
         isPaired={isPaired}
         onPreview={() => setShowDemo(true)}
@@ -355,6 +364,7 @@ function App() {
 
           <Routes>
             <Route path="/graph" element={<GraphAnalysisPage lnc={lnc} darkMode={darkMode} />} />
+            <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
             <Route path="*" element={<Navigate to="/graph" replace />} />
           </Routes>
 
