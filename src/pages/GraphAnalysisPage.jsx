@@ -13,6 +13,12 @@ import SectionBadge from '../components/analysis/SectionBadge';
 import ErrorBanner from '../components/analysis/ErrorBanner';
 import InlineSpinner from '../components/analysis/InlineSpinner';
 import DataSourceLegend from '../components/analysis/DataSourceLegend';
+import {
+    buildFrontendTelemetryEnvelope,
+    postRecommend,
+    postSnapshot,
+    postVerify,
+} from '../api/telemetryClient';
 
 const shortHex = (s, n = 10) => {
     if (!s) return '—';
@@ -81,6 +87,10 @@ const histogramFromBuckets = (values, buckets) => {
     }
     return out;
 };
+
+const compareText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+const makeChannelRef = (index) => `channel_${String(index + 1).padStart(4, '0')}`;
 
 const StatCard = ({ title, value, sub, color, darkMode, badge }) => (
     <div
@@ -152,6 +162,9 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [rangeDays, setRangeDays] = useState(7);
     const [missionControl, setMissionControl] = useState(null);
     const [missionError, setMissionError] = useState(null);
+    const [nodeInfo, setNodeInfo] = useState(null);
+    const [channels, setChannels] = useState([]);
+    const [peers, setPeers] = useState([]);
     const [nodePubkey, setNodePubkey] = useState(null);
     const [nodeMetrics, setNodeMetrics] = useState(null);
     const [nodeMetricsError, setNodeMetricsError] = useState(null);
@@ -163,6 +176,12 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [networkSize, setNetworkSize] = useState(36);
     const [showLabels, setShowLabels] = useState(true);
     const [focusNode, setFocusNode] = useState('');
+    const [privacyMode, setPrivacyMode] = useState('feature_only');
+    const [propsLoading, setPropsLoading] = useState(false);
+    const [propsError, setPropsError] = useState(null);
+    const [snapshotApiResult, setSnapshotApiResult] = useState(null);
+    const [recommendApiResult, setRecommendApiResult] = useState(null);
+    const [verifyApiResult, setVerifyApiResult] = useState(null);
 
     const fetchGraphData = useCallback(async () => {
         if (!lnc?.lnd?.lightning) {
@@ -256,10 +275,32 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         if (!lnc?.lnd?.lightning?.getInfo) return null;
         try {
             const info = await lnc.lnd.lightning.getInfo({});
-            return info?.identityPubkey || info?.identity_pubkey;
+            return info || null;
         } catch (e) {
             console.error('getInfo failed:', e);
             return null;
+        }
+    }, [lnc]);
+
+    const fetchChannelsData = useCallback(async () => {
+        if (!lnc?.lnd?.lightning?.listChannels) return [];
+        try {
+            const response = await lnc.lnd.lightning.listChannels({});
+            return Array.isArray(response?.channels) ? response.channels : [];
+        } catch (e) {
+            console.error('listChannels failed:', e);
+            return [];
+        }
+    }, [lnc]);
+
+    const fetchPeersData = useCallback(async () => {
+        if (!lnc?.lnd?.lightning?.listPeers) return [];
+        try {
+            const response = await lnc.lnd.lightning.listPeers({});
+            return Array.isArray(response?.peers) ? response.peers : [];
+        } catch (e) {
+            console.error('listPeers failed:', e);
+            return [];
         }
     }, [lnc]);
 
@@ -269,23 +310,43 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         setForwardingError(null);
         setMissionError(null);
         setNodeMetricsError(null);
+        setPropsError(null);
+        setSnapshotApiResult(null);
+        setRecommendApiResult(null);
+        setVerifyApiResult(null);
         try {
-            const [graphResp, forwardingResp, missionResp, metricsResp, pubkey] = await Promise.all([
+            const [graphResp, forwardingResp, missionResp, metricsResp, infoResp, channelsResp, peersResp] = await Promise.all([
                 fetchGraphData(),
                 fetchForwardingData(),
                 fetchMissionControlData(),
                 fetchNodeMetricsData(),
                 fetchNodeInfo(),
+                fetchChannelsData(),
+                fetchPeersData(),
             ]);
             if (graphResp) setGraph(graphResp);
             if (Array.isArray(forwardingResp)) setForwardingEvents(forwardingResp);
             if (missionResp) setMissionControl(missionResp);
             if (metricsResp) setNodeMetrics(metricsResp);
-            if (pubkey) setNodePubkey(String(pubkey).toLowerCase());
+            if (infoResp) {
+                setNodeInfo(infoResp);
+                const pubkey = infoResp?.identityPubkey || infoResp?.identity_pubkey;
+                if (pubkey) setNodePubkey(String(pubkey).toLowerCase());
+            }
+            if (Array.isArray(channelsResp)) setChannels(channelsResp);
+            if (Array.isArray(peersResp)) setPeers(peersResp);
         } finally {
             setIsLoading(false);
         }
-    }, [fetchGraphData, fetchForwardingData, fetchMissionControlData, fetchNodeMetricsData, fetchNodeInfo]);
+    }, [
+        fetchGraphData,
+        fetchForwardingData,
+        fetchMissionControlData,
+        fetchNodeMetricsData,
+        fetchNodeInfo,
+        fetchChannelsData,
+        fetchPeersData,
+    ]);
 
     const normalized = useMemo(() => {
         const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
@@ -699,6 +760,95 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         return filtered.slice(0, 200);
     }, [normalized.edges, normalized.nodeByPub, edgeQuery]);
 
+    const channelRefToChanId = useMemo(() => {
+        const ids = [...channels]
+            .map((channel) => String(channel?.chanId || channel?.chan_id || channel?.channelId || '').trim())
+            .filter(Boolean)
+            .sort(compareText);
+        const map = new Map();
+        ids.forEach((channelId, index) => {
+            map.set(makeChannelRef(index), channelId);
+        });
+        return map;
+    }, [channels]);
+
+    const propsSummary = useMemo(() => {
+        const recommendation = recommendApiResult?.recommendation;
+        const feeRows = Array.isArray(recommendation?.feeRecommendations) ? recommendation.feeRecommendations : [];
+        const rankingRows = Array.isArray(recommendation?.forwardOpportunityRanking) ? recommendation.forwardOpportunityRanking : [];
+        const verifyOk = Boolean(verifyApiResult?.ok);
+        return {
+            verifyOk,
+            errors: Array.isArray(verifyApiResult?.errors) ? verifyApiResult.errors : [],
+            warnings: Array.isArray(verifyApiResult?.warnings) ? verifyApiResult.warnings : [],
+            feeRows: feeRows.slice(0, 10),
+            rankingRows: rankingRows.slice(0, 10),
+        };
+    }, [recommendApiResult, verifyApiResult]);
+
+    const runPropsPipeline = useCallback(async () => {
+        if (!graph) {
+            setPropsError('Fetch data first, then run the Props pipeline.');
+            return;
+        }
+
+        setPropsLoading(true);
+        setPropsError(null);
+        setVerifyApiResult(null);
+
+        try {
+            const telemetry = buildFrontendTelemetryEnvelope({
+                namespace: 'tapvolt',
+                nodeInfo: nodeInfo || (nodePubkey ? { identityPubkey: nodePubkey } : null),
+                channels,
+                forwardingHistory: forwardingEvents,
+                routingFailures: [],
+                peers,
+                graphSnapshot: {
+                    fetchedAt: new Date().toISOString(),
+                    includeUnannounced,
+                    includeAuthProof,
+                    nodes: Array.isArray(graph?.nodes) ? graph.nodes : [],
+                    edges: Array.isArray(graph?.edges) ? graph.edges : [],
+                },
+                missionControl: missionControl || { pairs: [] },
+                nodeMetrics: nodeMetrics || { betweennessCentrality: {} },
+            });
+
+            const snapshotResponse = await postSnapshot(telemetry);
+            setSnapshotApiResult(snapshotResponse);
+
+            const recommendResponse = await postRecommend({
+                telemetry,
+                privacyMode,
+            });
+            setRecommendApiResult(recommendResponse);
+
+            const verifyResponse = await postVerify(
+                recommendResponse?.arb,
+                recommendResponse?.sourceProvenance
+            );
+            setVerifyApiResult(verifyResponse);
+        } catch (e) {
+            console.error('Props pipeline failed:', e);
+            setPropsError(e?.message || 'Props API request failed.');
+        } finally {
+            setPropsLoading(false);
+        }
+    }, [
+        graph,
+        nodeInfo,
+        nodePubkey,
+        channels,
+        forwardingEvents,
+        peers,
+        includeUnannounced,
+        includeAuthProof,
+        missionControl,
+        nodeMetrics,
+        privacyMode,
+    ]);
+
     return (
         <div className="px-6 pb-10 pt-8 space-y-8" style={{ maxWidth: 1280, margin: '0 auto' }}>
             {/* Header */}
@@ -768,6 +918,38 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         {isLoading ? 'Loading…' : 'Fetch Data'}
                     </button>
                     {isLoading && <InlineSpinner label="Fetching graph + private signals…" />}
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
+                        style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.04)', color: 'var(--text-secondary)' }}>
+                        <span className="uppercase tracking-widest font-semibold">Privacy</span>
+                        <select
+                            value={privacyMode}
+                            onChange={(e) => setPrivacyMode(String(e.target.value))}
+                            className="bg-transparent outline-none text-xs"
+                            style={{ color: 'var(--text-primary)' }}
+                        >
+                            <option value="feature_only">feature_only</option>
+                            <option value="banded">banded</option>
+                            <option value="full_internal">full_internal</option>
+                        </select>
+                    </div>
+                    <button
+                        onClick={runPropsPipeline}
+                        disabled={propsLoading || !graph}
+                        style={{
+                            padding: '10px 18px',
+                            borderRadius: 12,
+                            fontSize: 13,
+                            fontWeight: 700,
+                            cursor: propsLoading || !graph ? 'not-allowed' : 'pointer',
+                            border: `1px solid ${darkMode ? 'rgba(251,191,36,0.45)' : 'rgba(180,83,9,0.25)'}`,
+                            background: darkMode ? 'rgba(251,191,36,0.15)' : 'rgba(251,191,36,0.2)',
+                            color: darkMode ? '#fef08a' : '#854d0e',
+                            opacity: propsLoading || !graph ? 0.65 : 1,
+                        }}
+                    >
+                        {propsLoading ? 'Running Props…' : 'Run Props Pipeline'}
+                    </button>
+                    {propsLoading && <InlineSpinner label="Posting telemetry to API + verifying ARB…" />}
                     <button
                         onClick={() => graph && makeDownload(`describeGraph-${new Date().toISOString()}.json`, graph)}
                         disabled={!graph}
@@ -792,6 +974,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             <ErrorBanner message={forwardingError} />
             <ErrorBanner message={missionError} />
             <ErrorBanner message={nodeMetricsError} />
+            <ErrorBanner message={propsError} />
 
             {!graph && !isLoading && !error && (
                 <div className="rounded-xl p-8 text-sm text-center" style={{ backgroundColor: 'var(--form-bg)', color: 'var(--text-secondary)' }}>
@@ -804,6 +987,140 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
 
             {graph && (
                 <>
+                    <ChartCard
+                        title="Props API Pipeline"
+                        subtitle="Frontend telemetry → snapshot → privacy transform → deterministic recommendation → signed ARB"
+                        darkMode={darkMode}
+                        right={
+                            <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
+                                style={{
+                                    background: propsSummary.verifyOk ? 'rgba(34,197,94,0.16)' : 'rgba(148,163,184,0.18)',
+                                    color: propsSummary.verifyOk ? '#22c55e' : 'var(--text-secondary)',
+                                }}>
+                                {propsSummary.verifyOk ? 'ARB Verified' : 'Not Verified'}
+                            </span>
+                        }
+                    >
+                        {!recommendApiResult ? (
+                            <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                Run <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Props Pipeline</span> after
+                                fetching data to generate signed recommendations.
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                    <StatCard
+                                        title="Snapshot Mode"
+                                        value={String(snapshotApiResult?.mode || recommendApiResult?.mode || 'unknown')}
+                                        darkMode={darkMode}
+                                        color="var(--accent-2)"
+                                    />
+                                    <StatCard
+                                        title="Privacy Mode"
+                                        value={String(recommendApiResult?.privacyMode || 'unknown')}
+                                        darkMode={darkMode}
+                                        color="var(--accent-3)"
+                                        sub={`ARB policy ${String(recommendApiResult?.arb?.privacyPolicyId || 'unknown')}`}
+                                    />
+                                    <StatCard
+                                        title="Fee Recs"
+                                        value={String(recommendApiResult?.recommendation?.feeRecommendations?.length || 0)}
+                                        darkMode={darkMode}
+                                        color="var(--accent-1)"
+                                    />
+                                    <StatCard
+                                        title="Ranked Channels"
+                                        value={String(recommendApiResult?.recommendation?.forwardOpportunityRanking?.length || 0)}
+                                        darkMode={darkMode}
+                                        color="var(--accent-4)"
+                                    />
+                                </div>
+
+                                {propsSummary.warnings.length > 0 && (
+                                    <div className="rounded-lg p-3 text-xs"
+                                        style={{
+                                            backgroundColor: darkMode ? 'rgba(251,191,36,0.1)' : 'rgba(251,191,36,0.18)',
+                                            color: darkMode ? '#fef08a' : '#854d0e',
+                                        }}>
+                                        {propsSummary.warnings.join(' | ')}
+                                    </div>
+                                )}
+
+                                {propsSummary.errors.length > 0 && (
+                                    <div className="rounded-lg p-3 text-xs"
+                                        style={{
+                                            backgroundColor: darkMode ? 'rgba(251,113,133,0.12)' : 'rgba(244,63,94,0.12)',
+                                            color: darkMode ? '#fda4af' : '#9f1239',
+                                        }}>
+                                        {propsSummary.errors.join(' | ')}
+                                    </div>
+                                )}
+
+                                <div className="grid lg:grid-cols-2 gap-4">
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <div className="text-xs uppercase tracking-widest font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+                                            Fee Recommendations
+                                        </div>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                            <thead>
+                                                <tr>
+                                                    <th style={thStyle}>Channel Ref</th>
+                                                    <th style={thStyle}>Mapped ChanId</th>
+                                                    <th style={thStyle}>Action</th>
+                                                    <th style={thStyle}>Suggested PPM</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {propsSummary.feeRows.length === 0 ? (
+                                                    <tr>
+                                                        <td style={tdStyle} colSpan={4}>No fee recommendations.</td>
+                                                    </tr>
+                                                ) : propsSummary.feeRows.map((row) => (
+                                                    <tr key={`${row.channelRef}-${row.peerRef}`}>
+                                                        <td style={tdStyle}><span style={{ fontFamily: 'monospace' }}>{row.channelRef}</span></td>
+                                                        <td style={tdStyle}><span style={{ fontFamily: 'monospace' }}>{channelRefToChanId.get(row.channelRef) || 'unresolved'}</span></td>
+                                                        <td style={tdStyle}>{row.action}</td>
+                                                        <td style={{ ...tdStyle, textAlign: 'right' }}>{row.suggestedFeePpm ?? 'n/a'}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <div className="text-xs uppercase tracking-widest font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+                                            Forward Opportunity Ranking
+                                        </div>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                            <thead>
+                                                <tr>
+                                                    <th style={thStyle}>Rank</th>
+                                                    <th style={thStyle}>Channel Ref</th>
+                                                    <th style={thStyle}>Mapped ChanId</th>
+                                                    <th style={thStyle}>Score</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {propsSummary.rankingRows.length === 0 ? (
+                                                    <tr>
+                                                        <td style={tdStyle} colSpan={4}>No ranking rows.</td>
+                                                    </tr>
+                                                ) : propsSummary.rankingRows.map((row) => (
+                                                    <tr key={`${row.rank}-${row.channelRef}-${row.peerRef}`}>
+                                                        <td style={tdStyle}>{row.rank}</td>
+                                                        <td style={tdStyle}><span style={{ fontFamily: 'monospace' }}>{row.channelRef}</span></td>
+                                                        <td style={tdStyle}><span style={{ fontFamily: 'monospace' }}>{channelRefToChanId.get(row.channelRef) || 'unresolved'}</span></td>
+                                                        <td style={{ ...tdStyle, textAlign: 'right' }}>{row.score}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </ChartCard>
+
                     {/* KPI Cards */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <StatCard title="Nodes" value={kpis.nodeCount.toLocaleString()} darkMode={darkMode} color="var(--accent-2)" />
