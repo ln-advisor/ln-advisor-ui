@@ -60,6 +60,16 @@ export interface FeatureOnlyNodeState {
     missionLastSuccessTimestamp: number | null;
     missionLastFailTimestamp: number | null;
   }>;
+  potentialPeers: Array<{
+    pubkey: string;
+    alias: string;
+    capacitySat: number;
+    channelCount: number;
+    betweennessCentrality: number | null;
+    missionSuccessRate: number | null;
+    missionFailureRate: number | null;
+    lastActivityTimestamp: number | null;
+  }>;
   totals: {
     forwardCount: number;
     revenueSat: number;
@@ -284,10 +294,20 @@ const toFeatureOnly = (normalized: NormalizedNodeState): FeatureOnlyNodeState =>
     schemaVersion: "privacy-node-state-v1",
     privacyMode: "feature_only",
     sourceSchemaVersion: "normalized-node-state-v1",
-    nodeAlias: normalized.nodeAlias,
+    nodeAlias: "my-node-alias",
     channelCount: normalized.channelCount,
     channels,
     peers,
+    potentialPeers: [...normalized.potentialPeers].map((p) => ({
+      pubkey: p.pubkey,
+      alias: p.alias,
+      capacitySat: p.capacitySat,
+      channelCount: p.channelCount,
+      betweennessCentrality: p.betweennessCentrality,
+      missionSuccessRate: p.missionSuccessRate,
+      missionFailureRate: p.missionFailureRate,
+      lastActivityTimestamp: p.lastActivityTimestamp,
+    })),
     totals: {
       forwardCount: normalized.totals.forwardCount,
       revenueSat: normalized.totals.revenueSat,
@@ -372,7 +392,7 @@ const toBanded = (normalized: NormalizedNodeState): BandedNodeState => {
     schemaVersion: "privacy-node-state-v1",
     privacyMode: "banded",
     sourceSchemaVersion: "normalized-node-state-v1",
-    nodeAlias: normalized.nodeAlias,
+    nodeAlias: "my-node-alias",
     channelCount: normalized.channelCount,
     channels,
     peers,

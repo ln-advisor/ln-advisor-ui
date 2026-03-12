@@ -47,6 +47,20 @@ export interface ForwardOpportunityV1 {
   };
 }
 
+export interface ChannelOpeningRecommendationV1 {
+  pubkey: string;
+  alias: string;
+  score: number;
+  confidence: number;
+  signals: {
+    centralityBand: LevelBand;
+    reliabilityBand: LevelBand;
+    capacityBand: LevelBand;
+    channelCount: number;
+  };
+  reasons: string[];
+}
+
 export interface RecommendationSetV1 {
   schemaVersion: "recommendation-set-v1";
   modelVersion: "fee-forward-v1";
@@ -56,6 +70,7 @@ export interface RecommendationSetV1 {
   collectedAt: string;
   feeRecommendations: FeeRecommendationV1[];
   forwardOpportunityRanking: ForwardOpportunityV1[];
+  channelOpeningRecommendations: ChannelOpeningRecommendationV1[];
 }
 
 export interface ScoreNodeStateOptions {
@@ -461,6 +476,47 @@ const buildForwardOpportunity = (
   };
 };
 
+const buildChannelOpeningRecommendation = (
+  potential: FeatureOnlyNodeState["potentialPeers"][number],
+  centralityThresholds: { p33: number; p66: number }
+): ChannelOpeningRecommendationV1 => {
+  const reasons: string[] = [];
+  const centralityBand = classifyCentralityBand(potential.betweennessCentrality, centralityThresholds);
+  const reliabilityBand = classifyMissionReliabilityBand(potential.missionSuccessRate, potential.missionFailureRate);
+  
+  // Capacity Band: LOW < 1M, MEDIUM < 10M, HIGH >= 10M
+  let capacityBand: LevelBand = "LOW";
+  if (potential.capacitySat > 10_000_000) capacityBand = "HIGH";
+  else if (potential.capacitySat > 1_000_000) capacityBand = "MEDIUM";
+
+  // Score = BC / (Capacity + 1) * Reliability_Weight
+  const bc = potential.betweennessCentrality ?? 0;
+  const cap = Math.max(1, potential.capacitySat / 100_000_000); // normalize capacity to BTC units for better scaling
+  const relWeight = reliabilityBand === "HIGH" ? 1.5 : reliabilityBand === "LOW" ? 0.5 : 1.0;
+  
+  const rawScore = (bc / cap) * relWeight;
+  const score = roundFixed(rawScore * 1000, 3);
+
+  if (centralityBand === "HIGH") reasons.push("high_network_centrality");
+  if (reliabilityBand === "HIGH") reasons.push("proven_routing_reliability");
+  if (capacityBand === "LOW" && potential.channelCount > 5) reasons.push("altruistic_liquidity_gap");
+  if (potential.channelCount > 50) reasons.push("well_connected_hub");
+
+  return {
+    pubkey: potential.pubkey,
+    alias: potential.alias,
+    score,
+    confidence: roundFixed(Math.min(1, rawScore * 2), 3),
+    signals: {
+      centralityBand,
+      reliabilityBand,
+      capacityBand,
+      channelCount: potential.channelCount,
+    },
+    reasons: reasons.sort(compareText),
+  };
+};
+
 export function scoreNodeState(
   nodeState: ScoringInput,
   options?: ScoreNodeStateOptions
@@ -497,6 +553,11 @@ export function scoreNodeState(
     ...row,
   }));
 
+  const channelOpeningRecommendations = (featureOnly.potentialPeers || [])
+    .map((p) => buildChannelOpeningRecommendation(p, centralityThresholds))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+
   return {
     schemaVersion: "recommendation-set-v1",
     modelVersion: "fee-forward-v1",
@@ -506,5 +567,6 @@ export function scoreNodeState(
     collectedAt: String(options?.collectedAt ?? metadata.collectedAt ?? ""),
     feeRecommendations,
     forwardOpportunityRanking,
+    channelOpeningRecommendations,
   };
 }

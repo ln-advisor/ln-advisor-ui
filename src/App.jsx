@@ -17,6 +17,7 @@ import DemoGraphAnalysis from './components/DemoGraphAnalysis';
 
 import GraphAnalysisPage from './pages/GraphAnalysisPage';
 import ChannelsPage from './pages/ChannelsPage';
+import RecommendationsPage from './pages/RecommendationsPage';
 
 function App() {
   // LNC & Node State
@@ -365,6 +366,7 @@ function App() {
             <Routes>
               <Route path="/graph" element={<GraphAnalysisPage lnc={lnc} darkMode={darkMode} />} />
               <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
+              <Route path="/recommendations" element={<RecommendationsPage lnc={lnc} darkMode={darkMode} />} />
               <Route path="*" element={<Navigate to="/graph" replace />} />
             </Routes>
 
