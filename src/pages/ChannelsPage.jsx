@@ -310,6 +310,12 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
         };
     }, [feeModalOpen, selectedChannel, lnc]);
 
+    const handleCloseFeeModal = () => {
+        setFeeModalOpen(false);
+        setGeminiAnalysis(null);
+        setGeminiLoading(false);
+    };
+
     // ── Shared styles ──────────────────────────────────────────────────────────
     const cardStyle = {
         backgroundColor: 'var(--bg-card)',
@@ -480,6 +486,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 setPropsRecommendation(null);
                                                 setShowPayload(false);
                                                 setLastTelemetry(null);
+                                                setGeminiAnalysis(null);
+                                                setGeminiLoading(false);
                                             }}
                                         >
                                             <td style={tdStyle}>
@@ -543,7 +551,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
             {feeModalOpen && selectedChannel && createPortal(
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm transition-all duration-300 p-4"
-                    onClick={() => setFeeModalOpen(false)}
+                    onClick={handleCloseFeeModal}
                 >
                     <div
                         className="relative w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl p-8 shadow-2xl transform transition-transform duration-300 scale-100"
@@ -561,7 +569,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                 </p>
                             </div>
                             <button
-                                onClick={() => setFeeModalOpen(false)}
+                                onClick={handleCloseFeeModal}
                                 className="p-2 rounded-full transition-colors duration-200"
                                 style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)', color: 'var(--text-secondary)' }}
                                 aria-label="Close modal"

@@ -269,6 +269,8 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
           missionTotal > 0 ? roundFixed(mission.failCount / missionTotal, 6) : null,
         missionLastSuccessTimestamp: mission.lastSuccessTimestamp,
         missionLastFailTimestamp: mission.lastFailTimestamp,
+        networkInAvg: channel.networkInAvg ?? null,
+        networkOutAvg: channel.networkOutAvg ?? null,
       };
     })
     .sort((a, b) => compareText(a.channelId, b.channelId));

@@ -18,6 +18,7 @@ import {
     postRecommend,
     postSnapshot,
     postVerify,
+    postAnalyzeGemini,
 } from '../api/telemetryClient';
 
 const shortHex = (s, n = 10) => {
@@ -182,6 +183,9 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [snapshotApiResult, setSnapshotApiResult] = useState(null);
     const [recommendApiResult, setRecommendApiResult] = useState(null);
     const [verifyApiResult, setVerifyApiResult] = useState(null);
+    const [geminiAnalysis, setGeminiAnalysis] = useState(null);
+    const [geminiLoading, setGeminiLoading] = useState(false);
+    const [lastTelemetry, setLastTelemetry] = useState(null);
 
     const fetchGraphData = useCallback(async () => {
         if (!lnc?.lnd?.lightning) {
@@ -795,6 +799,8 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         setPropsLoading(true);
         setPropsError(null);
         setVerifyApiResult(null);
+        setGeminiAnalysis(null);
+        setGeminiLoading(false);
 
         try {
             const telemetry = buildFrontendTelemetryEnvelope({
@@ -814,6 +820,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                 missionControl: missionControl || { pairs: [] },
                 nodeMetrics: nodeMetrics || { betweennessCentrality: {} },
             });
+            setLastTelemetry(telemetry);
 
             const snapshotResponse = await postSnapshot(telemetry);
             setSnapshotApiResult(snapshotResponse);
@@ -1116,6 +1123,59 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                                             </tbody>
                                         </table>
                                     </div>
+                                </div>
+
+                                {/* Gemini Analysis Section */}
+                                <div className="pt-6 border-t border-white/10 mt-6">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-5 h-5 flex items-center justify-center rounded-full bg-indigo-500/20 text-indigo-400">
+                                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                                </svg>
+                                            </div>
+                                            <h4 className="text-xs font-bold uppercase tracking-widest text-indigo-300">Gemini Second Opinion</h4>
+                                        </div>
+                                        
+                                        {!geminiAnalysis && !geminiLoading && (
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        setGeminiLoading(true);
+                                                        const gRes = await postAnalyzeGemini(lastTelemetry, recommendApiResult?.recommendation);
+                                                        if (gRes.ok) setGeminiAnalysis(gRes.analysis);
+                                                    } catch (gErr) {
+                                                        console.warn('Gemini analysis failed:', gErr);
+                                                    } finally {
+                                                        setGeminiLoading(false);
+                                                    }
+                                                }}
+                                                className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors uppercase tracking-tight flex items-center gap-1"
+                                            >
+                                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                                </svg>
+                                                Verify with AI
+                                            </button>
+                                        )}
+                                    </div>
+                                    
+                                    {geminiLoading ? (
+                                        <div className="flex items-center gap-2 text-[10px] text-indigo-400/60 font-mono animate-pulse">
+                                            <div className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></div>
+                                            AI is reviewing the recommendation...
+                                        </div>
+                                    ) : geminiAnalysis ? (
+                                        <div className="rounded-xl p-4 bg-indigo-500/5 border border-indigo-500/10">
+                                            <p className="text-[11px] leading-relaxed text-indigo-200/80 italic">
+                                                "{geminiAnalysis}"
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="text-[10px] text-indigo-400/40 italic">
+                                            Click "Verify with AI" to get an intelligent second opinion on the network recommendations.
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}

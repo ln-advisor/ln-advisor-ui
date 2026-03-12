@@ -24,6 +24,9 @@ export interface FeeRecommendationV1 {
     forwardCount: number;
     missionReliabilityBand: LevelBand;
     centralityBand: LevelBand;
+    revenueBand: LevelBand;
+    marketOutlier: "OVERPRICED" | "UNDERPRICED" | "NEUTRAL";
+    peerSymmetry: "SYMMETRIC" | "ASYMMETRIC";
   };
   reasons: string[];
 }
@@ -105,6 +108,25 @@ const buildCentralityThresholds = (
     p33: percentile(centralityValues, 1 / 3),
     p66: percentile(centralityValues, 2 / 3),
   };
+};
+
+const buildRevenueThresholds = (
+  channels: FeatureOnlyNodeState["channels"]
+): { p33: number; p66: number } => {
+  const revenueValues = channels
+    .map((channel) => channel.revenueSat)
+    .filter((rev): rev is number => rev !== null)
+    .sort((a, b) => a - b);
+  return {
+    p33: percentile(revenueValues, 1 / 3),
+    p66: percentile(revenueValues, 2 / 3),
+  };
+};
+
+const classifyRevenueBand = (revenueSat: number, thresholds: { p33: number; p66: number }): LevelBand => {
+  if (revenueSat <= thresholds.p33) return "LOW";
+  if (revenueSat <= thresholds.p66) return "MEDIUM";
+  return "HIGH";
 };
 
 const classifyFeeBand = (feePpm: number | null, thresholds: { p33: number; p66: number }): LevelBand | "UNKNOWN" => {
@@ -214,7 +236,8 @@ const buildFeeRecommendation = (
   channel: FeatureOnlyNodeState["channels"][number],
   maxActivityTs: number | null,
   feeThresholds: { p33: number; p66: number },
-  centralityThresholds: { p33: number; p66: number }
+  centralityThresholds: { p33: number; p66: number },
+  revenueThresholds: { p33: number; p66: number }
 ): FeeRecommendationV1 => {
   const reasons = new Set<string>();
   const recentActivity = classifyRecentActivity(channel.lastActivityTimestamp, maxActivityTs);
@@ -229,6 +252,7 @@ const buildFeeRecommendation = (
     channel.peerBetweennessCentrality,
     centralityThresholds
   );
+  const revenueBand = classifyRevenueBand(channel.revenueSat, revenueThresholds);
 
   let raiseScore = 0;
   let lowerScore = 0;
@@ -278,6 +302,46 @@ const buildFeeRecommendation = (
     lowerScore += 1;
     reasons.add("peer_centrality_low");
   }
+  
+  // Market Awareness & Peer Symmetry
+  const peerInPpm = channel.inboundFeePpm ?? 0;
+  const ourOutPpm = channel.outboundFeePpm ?? 0;
+  let marketOutlier: "OVERPRICED" | "UNDERPRICED" | "NEUTRAL" = "NEUTRAL";
+  let peerSymmetry: "SYMMETRIC" | "ASYMMETRIC" = "SYMMETRIC";
+
+  if (ourOutPpm > peerInPpm + 500) {
+    peerSymmetry = "ASYMMETRIC";
+    reasons.add("peer_fee_asymmetry_high");
+    raiseScore = 0; // Don't raise if already much higher than peer
+    lowerScore += 1;
+  }
+
+  if (channel.networkOutAvg !== null) {
+    const marketAvg = channel.networkOutAvg;
+    if (ourOutPpm > marketAvg * 1.5 && ourOutPpm > 100) {
+      marketOutlier = "OVERPRICED";
+      reasons.add("market_price_over");
+      lowerScore += 1;
+    } else if (ourOutPpm < marketAvg * 0.5) {
+      marketOutlier = "UNDERPRICED";
+      reasons.add("market_price_under");
+      raiseScore += 1;
+    }
+  }
+
+  // Performance & Revenue Awareness
+  if (revenueBand === "HIGH") {
+    if (liquidityImbalance === "BALANCED") {
+      // Protect high earning balanced channels from unnecessary fee changes
+      raiseScore = 0;
+      lowerScore = 0;
+      reasons.add("high_yield_efficiency");
+    } else if (liquidityImbalance === "REMOTE_HEAVY") {
+      // Aggressively raise fees if high revenue channel is becoming scarce
+      raiseScore += 2;
+      reasons.add("high_yield_demand");
+    }
+  }
 
   let action: FeeAction = "hold";
   if (channel.active) {
@@ -303,6 +367,9 @@ const buildFeeRecommendation = (
       forwardCount: channel.forwardCountTotal,
       missionReliabilityBand,
       centralityBand,
+      revenueBand,
+      marketOutlier,
+      peerSymmetry,
     },
     reasons: [...reasons].sort(compareText),
   };
@@ -408,11 +475,12 @@ export function scoreNodeState(
     }, null) ?? null;
   const feeThresholds = buildFeeBandThresholds(sortedChannels);
   const centralityThresholds = buildCentralityThresholds(sortedChannels);
+  const revenueThresholds = buildRevenueThresholds(sortedChannels);
   const peerMap = buildPeerMap(featureOnly.peers);
 
   const feeRecommendations = sortedChannels
     .map((channel) =>
-      buildFeeRecommendation(channel, maxActivityTs, feeThresholds, centralityThresholds)
+      buildFeeRecommendation(channel, maxActivityTs, feeThresholds, centralityThresholds, revenueThresholds)
     )
     .sort((a, b) => compareText(a.channelRef, b.channelRef));
 

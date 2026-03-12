@@ -39,6 +39,8 @@ export interface FeatureOnlyNodeState {
     missionFailureRate: number | null;
     missionLastSuccessTimestamp: number | null;
     missionLastFailTimestamp: number | null;
+    networkInAvg: number | null;
+    networkOutAvg: number | null;
   }>;
   peers: Array<{
     peerRef: string;
@@ -249,6 +251,8 @@ const toFeatureOnly = (normalized: NormalizedNodeState): FeatureOnlyNodeState =>
       missionFailureRate: channel.missionFailureRate,
       missionLastSuccessTimestamp: channel.missionLastSuccessTimestamp,
       missionLastFailTimestamp: channel.missionLastFailTimestamp,
+      networkInAvg: channel.networkInAvg,
+      networkOutAvg: channel.networkOutAvg,
     }));
 
   const peers = [...normalized.peers]

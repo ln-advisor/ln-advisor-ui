@@ -293,8 +293,17 @@ export function telemetryToLightningSnapshot(
   const namespace = String(telemetry.namespace || "").trim() || "tapvolt";
   const nodeInfo = telemetry.nodeInfo ? normalizeNodeInfo(telemetry.nodeInfo) : null;
 
+  const metadata = toRecord(telemetry.metadata);
+  const networkInAvg = readNumberLike(pick(metadata, "networkInAvg"));
+  const networkOutAvg = readNumberLike(pick(metadata, "networkOutAvg"));
+
   const channels = [...(Array.isArray(telemetry.channels) ? telemetry.channels : [])]
-    .map(normalizeChannel)
+    .map((raw) => {
+      const ch = normalizeChannel(raw);
+      if (networkInAvg !== undefined) ch.networkInAvg = Number(networkInAvg);
+      if (networkOutAvg !== undefined) ch.networkOutAvg = Number(networkOutAvg);
+      return ch;
+    })
     .sort((a, b) => compareText(a.chanId || "", b.chanId || ""));
 
   const forwardingHistory = [...(Array.isArray(telemetry.forwardingHistory) ? telemetry.forwardingHistory : [])]

@@ -20,6 +20,8 @@ export interface NormalizedChannelState {
   missionFailureRate: number | null;
   missionLastSuccessTimestamp: number | null;
   missionLastFailTimestamp: number | null;
+  networkInAvg: number | null;
+  networkOutAvg: number | null;
 }
 
 export interface NormalizedPeerAggregate {

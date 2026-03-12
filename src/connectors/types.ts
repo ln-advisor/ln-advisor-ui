@@ -28,7 +28,8 @@ export interface LightningChannel {
   totalSatoshisSent?: NumericLike;
   totalSatoshisReceived?: NumericLike;
   numUpdates?: NumericLike;
-  // TODO(step-1): Add normalized commitment-policy fields if they are needed by scoring.
+  networkInAvg?: number;
+  networkOutAvg?: number;
   [key: string]: unknown;
 }
 
@@ -159,4 +160,5 @@ export interface FrontendTelemetryEnvelope {
   graphSnapshot?: FrontendGraphSnapshot | null;
   missionControl?: FrontendMissionControlSnapshot | null;
   nodeMetrics?: FrontendNodeMetricsSnapshot | null;
+  metadata?: unknown;
 }
