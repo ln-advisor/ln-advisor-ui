@@ -1303,10 +1303,10 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 nodeInfo,
                                                 channels: [{
                                                     chanId: selectedChannel.chanId,
-                                                    remote_pubkey: selectedChannel.peerPubkey,
+                                                    remotePubkey: selectedChannel.peerPubkey,
                                                     capacity: selectedChannel.capacity,
-                                                    local_balance: selectedChannel.local,
-                                                    remote_balance: selectedChannel.remote,
+                                                    localBalance: selectedChannel.local,
+                                                    remoteBalance: selectedChannel.remote,
                                                     active: true
                                                 }],
                                                 peers,
@@ -1440,7 +1440,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                     onClick={async () => {
                                                         try {
                                                             setGeminiLoading(true);
-                                                            const gRes = await postAnalyzeGemini(lastTelemetry, propsRecommendation);
+                                                            const gRes = await postAnalyzeGemini(pipelineData.propsPayload, propsRecommendation);
                                                             if (gRes.ok) setGeminiAnalysis(gRes.analysis);
                                                         } catch (gErr) {
                                                             console.warn('Gemini analysis failed:', gErr);

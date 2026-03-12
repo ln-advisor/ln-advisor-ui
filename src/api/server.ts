@@ -329,7 +329,8 @@ export function createApiServer(): http.Server {
         }
 
         const ai = new GoogleGenAI({ apiKey });
-
+        console.log(telemetry);
+        console.log(recommendation);
         try {
           const result = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
