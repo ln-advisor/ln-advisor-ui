@@ -7,6 +7,8 @@ import {
     postAnalyzeGemini,
     buildFrontendTelemetryEnvelope
 } from '../api/telemetryClient';
+import { normalizeSnapshot } from '../normalization/normalizeSnapshot';
+import { applyPrivacyPolicy } from '../privacy/applyPrivacyPolicy';
 
 
 const fmtSats = (n) => {
@@ -20,6 +22,56 @@ const shortChan = (id) => {
     if (!id) return '—';
     const s = String(id);
     return s.length > 10 ? `…${s.slice(-8)}` : s;
+};
+
+const DataModal = ({ isOpen, onClose, title, data, darkMode }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 md:p-10 bg-black/60 backdrop-blur-sm animate-fade-in">
+            <div 
+                className="w-full max-w-4xl max-h-[85vh] flex flex-col rounded-3xl overflow-hidden shadow-2xl border transition-all duration-300 transform scale-100"
+                style={{ 
+                    backgroundColor: 'var(--bg-card)',
+                    borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+                }}
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="flex items-center justify-between px-8 py-6 border-b" style={{ borderColor: 'var(--border-color)' }}>
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-500">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                            </svg>
+                        </div>
+                        <h3 className="text-xl font-bold font-display" style={{ color: 'var(--text-primary)' }}>{title}</h3>
+                    </div>
+                    <button 
+                        onClick={onClose}
+                        className="p-2 rounded-full hover:bg-slate-500/10 transition-colors"
+                        style={{ color: 'var(--text-secondary)' }}
+                    >
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-8 font-mono text-sm leading-relaxed" style={{ backgroundColor: darkMode ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.02)' }}>
+                    <pre className="whitespace-pre-wrap break-all" style={{ color: darkMode ? '#94a3b8' : '#334155' }}>
+                        {JSON.stringify(data, null, 2)}
+                    </pre>
+                </div>
+                <div className="px-8 py-4 border-t flex justify-end" style={{ borderColor: 'var(--border-color)' }}>
+                    <button 
+                        onClick={onClose}
+                        className="px-6 py-2 rounded-xl font-bold text-sm text-white transition-all hover:scale-105 active:scale-95 shadow-lg"
+                        style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))' }}
+                    >
+                        Done
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
@@ -50,6 +102,19 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
     const [missionControl, setMissionControl] = useState(null);
     const [geminiAnalysis, setGeminiAnalysis] = useState(null);
     const [geminiLoading, setGeminiLoading] = useState(false);
+
+    // Filter & Pipeline State
+    const [showPipeline, setShowPipeline] = useState(false);
+    const [pipelineData, setPipelineData] = useState({
+        rawMetadata: null,
+        normalizedMetadata: null,
+        propsPayload: null
+    });
+    const [modalConfig, setModalConfig] = useState({
+        isOpen: false,
+        title: '',
+        data: null
+    });
 
     // 1. Fetch channel aliases
     useEffect(() => {
@@ -1220,6 +1285,47 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                             };
 
                                             setLastTelemetry(rawTelemetry); // Store RAW for metadata display to avoid crash
+                                            
+                                            // Stage 1: Raw Snapshot
+                                            const rawSnapshot = {
+                                                channelId: selectedChannel.chanId,
+                                                peerPubkey: selectedChannel.peerPubkey,
+                                                _raw: {
+                                                    node: nodeInfo,
+                                                    channel: selectedChannel,
+                                                    peers: peers.filter(p => (p.pub_key || p.pubKey) === selectedChannel.peerPubkey),
+                                                    missionControlCount: rawTelemetry.missionControl?.pairs?.length || 0
+                                                }
+                                            };
+
+                                            // Stage 2: Normalization
+                                            const normalizedSnapshot = normalizeSnapshot({
+                                                nodeInfo,
+                                                channels: [{
+                                                    chanId: selectedChannel.chanId,
+                                                    remote_pubkey: selectedChannel.peerPubkey,
+                                                    capacity: selectedChannel.capacity,
+                                                    local_balance: selectedChannel.local,
+                                                    remote_balance: selectedChannel.remote,
+                                                    active: true
+                                                }],
+                                                peers,
+                                                graphNodes: [], // Minimal for single channel analysis
+                                                graphEdges: [],
+                                                nodeCentralityMetrics: [],
+                                                missionControlPairs: rawTelemetry.missionControl?.pairs || [],
+                                                collectedAt: new Date().toISOString()
+                                            });
+
+                                            // Stage 3: PROPS Payload
+                                            const propsSnapshot = applyPrivacyPolicy(normalizedSnapshot, 'feature_only');
+
+                                            setPipelineData({
+                                                rawMetadata: rawSnapshot,
+                                                normalizedMetadata: normalizedSnapshot,
+                                                propsPayload: propsSnapshot
+                                            });
+
                                             const telemetryEnvelope = buildFrontendTelemetryEnvelope(rawTelemetry);
 
                                             // 1. Post Snapshot (completes the pipeline flow)
@@ -1411,12 +1517,12 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                 </div>
                             )}
 
-                            {lastTelemetry && (
+                            {pipelineData.rawMetadata && (
                                 <div className="border-t bg-black/10 transition-colors hover:bg-black/20" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
                                     <button
                                         className="w-full flex items-center justify-between px-5 py-4 text-sm font-bold transition-all duration-200"
                                         style={{ color: darkMode ? 'var(--accent-1)' : 'var(--accent-2)' }}
-                                        onClick={() => setShowPayload(!showPayload)}
+                                        onClick={() => setShowPipeline(!showPipeline)}
                                     >
                                         <div className="flex items-center gap-2.5">
                                             <div className="p-1.5 rounded-md bg-white/5 border border-white/5">
@@ -1424,36 +1530,79 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
                                                 </svg>
                                             </div>
-                                            View Extraction Metadata
+                                            PROPS Pipeline Explorer
                                         </div>
                                         <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold opacity-50">
-                                            {showPayload ? 'Collapse' : 'Expand'}
-                                            <svg className={`w-3 h-3 transform transition-transform duration-300 ${showPayload ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            {showPipeline ? 'Hide' : 'Expand'}
+                                            <svg className={`w-3 h-3 transform transition-transform duration-300 ${showPipeline ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                             </svg>
                                         </div>
                                     </button>
 
-                                    {showPayload && (
-                                        <div className="px-5 pb-6 animate-fade-in">
-                                            <div className="bg-black/50 rounded-xl p-5 overflow-x-auto border border-white/10 shadow-inner font-mono text-[11px] leading-relaxed">
-                                                <pre className="text-emerald-400/90 whitespace-pre">
-                                                    {JSON.stringify(lastTelemetry, (key, value) => {
-                                                        if (Array.isArray(value)) return `[Array(${value.length})]`;
-                                                        return value;
-                                                    }, 2)}
-                                                </pre>
-                                                <div className="mt-4 pt-4 border-t border-white/5 space-y-1">
-                                                    <p className="text-[10px] text-white/30 uppercase tracking-tighter">Detailed Series (Omitted for brevity)</p>
-                                                    <pre className="text-white/20 whitespace-pre-wrap">
-                                                        {JSON.stringify({
-                                                            incoming: `[${lastTelemetry.peerFeeSeries?.incoming?.length || 0} items]`,
-                                                            outgoing: `[${lastTelemetry.peerFeeSeries?.outgoing?.length || 0} items]`
-                                                        }, null, 2)}
-                                                    </pre>
+                                    {showPipeline && (
+                                        <div className="px-5 pb-6 animate-fade-in space-y-4">
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                {/* Stage 1: Raw */}
+                                                <div className="rounded-xl p-4 space-y-3" style={{ backgroundColor: 'rgba(0,0,0,0.2)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-5 h-5 rounded-md bg-amber-500/20 text-amber-500 flex items-center justify-center text-[10px] font-bold">1</div>
+                                                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-amber-500/80">Raw Retrieval</h4>
+                                                    </div>
+                                                    <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Full channel context & MC pairs extracted locally.</p>
+                                                    <button 
+                                                        className="w-full py-1.5 rounded-lg bg-amber-500/10 text-amber-500 text-[10px] font-bold uppercase border border-amber-500/20 hover:bg-amber-500/20 transition-all"
+                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 1: Raw LND Extraction', data: pipelineData.rawMetadata })}
+                                                    >
+                                                        View Raw
+                                                    </button>
+                                                </div>
+
+                                                {/* Stage 2: Normalized */}
+                                                <div className="rounded-xl p-4 space-y-3" style={{ backgroundColor: 'rgba(0,0,0,0.2)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-5 h-5 rounded-md bg-blue-500/20 text-blue-500 flex items-center justify-center text-[10px] font-bold">2</div>
+                                                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-blue-500/80">Normalized</h4>
+                                                    </div>
+                                                    <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Structured node-state for efficient analysis.</p>
+                                                    <button 
+                                                        className="w-full py-1.5 rounded-lg bg-blue-500/10 text-blue-500 text-[10px] font-bold uppercase border border-blue-500/20 hover:bg-blue-500/20 transition-all"
+                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 2: Normalized Metadata', data: pipelineData.normalizedMetadata })}
+                                                    >
+                                                        View Normalized
+                                                    </button>
+                                                </div>
+
+                                                {/* Stage 3: PROPS */}
+                                                <div className="rounded-xl p-4 space-y-3" style={{ backgroundColor: 'rgba(0,0,0,0.2)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-5 h-5 rounded-md bg-emerald-500/20 text-emerald-500 flex items-center justify-center text-[10px] font-bold">3</div>
+                                                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-emerald-500/80">PROPS Shield</h4>
+                                                    </div>
+                                                    <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Anonymized, banded & rounded for transmission.</p>
+                                                    <button 
+                                                        className="w-full py-1.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase border border-emerald-500/20 hover:bg-emerald-500/20 transition-all"
+                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 3: PROPS Final Payload', data: pipelineData.propsPayload })}
+                                                    >
+                                                        Inspect Payload
+                                                    </button>
                                                 </div>
                                             </div>
-                                            <p className="mt-4 text-[10px] text-white/40 text-center font-medium">This telemetry packet is processed inside a protected TEE inference boundary.</p>
+                                            
+                                            <div className="rounded-lg p-3 bg-indigo-500/5 border border-indigo-500/10">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <svg className="w-3 h-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                    </svg>
+                                                    <h5 className="text-[10px] font-bold uppercase tracking-widest text-indigo-400">Props Architecture</h5>
+                                                </div>
+                                                <p className="text-[10px] leading-relaxed text-indigo-300/60">
+                                                    Protected Pipelines (PROPS) preserve privacy by applying client-side transformations (`f(X)`) before data leaves your infrastructure. 
+                                                    Sensitive IDs are masked and balances are banded to prevent individual node recognition.
+                                                </p>
+                                            </div>
+
+                                            <p className="text-[9px] text-white/20 text-center uppercase tracking-tighter">This telemetry packet is processed inside a protected TEE inference boundary.</p>
                                         </div>
                                     )}
                                 </div>
@@ -1462,6 +1611,13 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                         </div>
 
                     </div>
+                    <DataModal 
+                        isOpen={modalConfig.isOpen} 
+                        onClose={() => setModalConfig({ ...modalConfig, isOpen: false })}
+                        title={modalConfig.title}
+                        data={modalConfig.data}
+                        darkMode={darkMode}
+                    />
                 </div>
                 , document.body)}
         </div>
