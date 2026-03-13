@@ -83,3 +83,73 @@ export const postVerify = async <T = unknown>(arb: unknown, sourceProvenance?: u
 
 export const postAnalyzeGemini = async <T = unknown>(telemetry: unknown, recommendation: unknown): Promise<T> =>
   postJson<T>("/api/analyze-gemini", { telemetry, recommendation });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROPS-specific typed API calls
+// Each function sends only the data relevant to its analysis type.
+// The payload must be derived from the PROPS pipeline (applyPrivacyPolicy),
+// never raw telemetry, so no private node identifiers reach the server.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Channel Opening Recommendations
+ * Route: POST /api/recommend/channel-openings
+ *
+ * Sends PROPS feature_only node state built from full-graph data:
+ *  - Peer aggregates (channel counts, balance ratios, mission control reliability)
+ *  - Potential peer list with betweenness centrality scores
+ *  - Node-level totals (forward count, revenue, failed forwards)
+ *
+ * Does NOT include: raw pubkeys, actual balances, per-channel fee policies,
+ * or forwarding history detail — only anonymised references and ratios.
+ */
+export interface ChannelOpeningRecommendRequest {
+  /** PROPS feature_only transformed node state (output of applyPrivacyPolicy) */
+  propsPayload: unknown;
+  privacyMode?: "feature_only" | "banded";
+  issuedAt?: string;
+}
+
+export const postChannelOpeningRecommendations = async <T = unknown>(
+  request: ChannelOpeningRecommendRequest
+): Promise<T> =>
+  postJson<T>("/api/recommend/channel-openings", {
+    propsPayload: request.propsPayload,
+    privacyMode: request.privacyMode || "feature_only",
+    ...(request.issuedAt ? { issuedAt: request.issuedAt } : {}),
+  });
+
+/**
+ * Fee Suggestion for a single channel
+ * Route: POST /api/recommend/fee-suggestions
+ *
+ * Sends PROPS feature_only node state scoped to a single channel:
+ *  - Channel liquidity ratio (local/remote balance as ratios, not raw sats)
+ *  - Forwarding counts and revenue for the channel (from PROPS normalisation)
+ *  - Current fee policies (outbound ppm, inbound ppm) via PROPS channel data
+ *  - Peer network fee context (avg/weighted avg ppm from the peer's other channels)
+ *
+ * Does NOT include: full graph, other channels, unrelated peers, raw pubkeys,
+ * or actual satoshi amounts — only anonymised references and ratios.
+ */
+export interface FeeSuggestionRequest {
+  /** PROPS feature_only transformed node state scoped to one channel (output of applyPrivacyPolicy) */
+  propsPayload: unknown;
+  /** Additional peer-network fee context not available in the normalised snapshot */
+  peerFeeContext?: {
+    networkInAvgPpm: number | null;
+    networkOutAvgPpm: number | null;
+  };
+  privacyMode?: "feature_only" | "banded";
+  issuedAt?: string;
+}
+
+export const postFeeSuggestion = async <T = unknown>(
+  request: FeeSuggestionRequest
+): Promise<T> =>
+  postJson<T>("/api/recommend/fee-suggestions", {
+    propsPayload: request.propsPayload,
+    ...(request.peerFeeContext ? { peerFeeContext: request.peerFeeContext } : {}),
+    privacyMode: request.privacyMode || "feature_only",
+    ...(request.issuedAt ? { issuedAt: request.issuedAt } : {}),
+  });

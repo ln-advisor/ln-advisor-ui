@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
@@ -19,6 +20,31 @@ import { buildArb, type ArbBundle } from "../arb/buildArb";
 import { verifyArb } from "../arb/verifyArb";
 
 type SnapshotMode = "lnc" | "mock" | "frontend_payload";
+
+// Builds a minimal but structurally valid SourceProvenanceReceipt for PROPS-only
+// routes where we never see raw telemetry. We hash the already-privacy-filtered
+// payload and use that as privacyTransformedSnapshotHash, which is all buildArb needs.
+const buildPropsProvenance = (propsPayload: unknown, collectedAt: string): SourceProvenanceReceipt => {
+  const canonical = JSON.stringify(propsPayload);
+  const payloadHash = createHash("sha256").update(canonical).digest("hex");
+  return {
+    schemaVersion: "source-provenance-receipt-v1",
+    sourceType: "lnc_frontend_extractor",
+    snapshotTimestamp: collectedAt,
+    nodeIdentifier: "props-shielded",
+    rawSnapshotHash: payloadHash,           // no raw snapshot; use props hash as placeholder
+    normalizedSnapshotHash: payloadHash,    // same — props payload is the only data we have
+    privacyTransformedSnapshotHash: payloadHash, // this is what buildArb uses as inputHash
+    graphSnapshotRef: null,
+    executionContext: {
+      schemaVersion: "source-execution-context-v1",
+      executionMode: "host_local",
+      enclaveProviderId: null,
+      attestationHash: null,
+    },
+  };
+};
+
 
 interface SnapshotResponse {
   ok: true;
@@ -112,7 +138,7 @@ const readFrontendTelemetry = (value: unknown): FrontendTelemetryEnvelope | null
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const typed = value as Record<string, unknown>;
   if (typed.schemaVersion !== "frontend-telemetry-envelope-v1") return null;
-  return typed as FrontendTelemetryEnvelope;
+  return typed as unknown as FrontendTelemetryEnvelope;
 };
 
 const toPrivacyMode = (value: unknown): PrivacyMode => {
@@ -270,6 +296,119 @@ export function createApiServer(): http.Server {
         return;
       }
 
+      // ─────────────────────────────────────────────────────────────────────
+      // POST /api/recommend/channel-openings
+      //
+      // Receives a PROPS feature_only payload (already privacy-filtered by the
+      // client's applyPrivacyPolicy step). Runs the scoring model directly on
+      // the PROPS state and returns channelOpeningRecommendations.
+      //
+      // Expected body: { propsPayload: FeatureOnlyNodeState, privacyMode?, issuedAt? }
+      // ─────────────────────────────────────────────────────────────────────
+      if (url.pathname === "/api/recommend/channel-openings") {
+        const propsPayload = body.propsPayload as import("../privacy/applyPrivacyPolicy").FeatureOnlyNodeState | undefined;
+        const issuedAt = typeof body.issuedAt === "string" ? body.issuedAt : undefined;
+
+        if (!propsPayload || typeof propsPayload !== "object") {
+          sendJson(res, 400, { ok: false, error: "Provide a propsPayload (PROPS feature_only node state)." });
+          return;
+        }
+
+        const collectedAt = new Date().toISOString();
+        const recommendation = scoreNodeState(propsPayload as any, {
+          nodePubkey: "props-shielded",
+          nodeAlias: (propsPayload as any).nodeAlias || "my-node-alias",
+          collectedAt,
+        });
+
+        const arb = buildArb({
+          recommendation,
+          sourceProvenance: buildPropsProvenance(propsPayload, collectedAt),
+          privacyPolicyId: "feature_only",
+          devSigningKey: process.env.ARB_DEV_SIGNING_KEY?.trim() || DEFAULT_DEV_SIGNING_KEY,
+          issuedAt: issuedAt || process.env.ARB_ISSUED_AT?.trim() || collectedAt,
+        });
+
+        const recommendationPath = path.resolve(process.cwd(), "artifacts", "channel-openings.recommendations.json");
+        const arbPath = path.resolve(process.cwd(), "artifacts", "channel-openings.arb.json");
+        await writeJsonDeterministic(recommendationPath, recommendation);
+        await writeJsonDeterministic(arbPath, arb);
+
+        sendJson(res, 200, {
+          ok: true,
+          route: "channel-openings",
+          privacyMode: "feature_only",
+          recommendationPath,
+          arbPath,
+          recommendation,
+          arb,
+        });
+        return;
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
+      // POST /api/recommend/fee-suggestions
+      //
+      // Receives a PROPS feature_only payload scoped to a single channel
+      // (already privacy-filtered by the client's applyPrivacyPolicy step).
+      // Optionally includes peerFeeContext with network average fee data.
+      // Runs the scoring model and returns feeRecommendations.
+      //
+      // Expected body: {
+      //   propsPayload: FeatureOnlyNodeState,  // scoped to 1 channel
+      //   peerFeeContext?: { networkInAvgPpm, networkOutAvgPpm },
+      //   privacyMode?, issuedAt?
+      // }
+      // ─────────────────────────────────────────────────────────────────────
+      if (url.pathname === "/api/recommend/fee-suggestions") {
+        const propsPayload = body.propsPayload as import("../privacy/applyPrivacyPolicy").FeatureOnlyNodeState | undefined;
+        const peerFeeContext = body.peerFeeContext as { networkInAvgPpm?: number | null; networkOutAvgPpm?: number | null } | undefined;
+        const issuedAt = typeof body.issuedAt === "string" ? body.issuedAt : undefined;
+
+        if (!propsPayload || typeof propsPayload !== "object") {
+          sendJson(res, 400, { ok: false, error: "Provide a propsPayload (PROPS feature_only node state for the channel)." });
+          return;
+        }
+
+        // Merge peer fee context into the props payload as metadata so scoreNodeState
+        // can use it for fee comparison, without exposing raw network data.
+        const payloadWithContext = {
+          ...propsPayload,
+          ...(peerFeeContext ? { peerFeeContext } : {}),
+        };
+
+        const collectedAt = new Date().toISOString();
+        const recommendation = scoreNodeState(payloadWithContext as any, {
+          nodePubkey: "props-shielded",
+          nodeAlias: (propsPayload as any).nodeAlias || "my-node-alias",
+          collectedAt,
+        });
+
+        const arb = buildArb({
+          recommendation,
+          sourceProvenance: buildPropsProvenance(propsPayload, collectedAt),
+          privacyPolicyId: "feature_only",
+          devSigningKey: process.env.ARB_DEV_SIGNING_KEY?.trim() || DEFAULT_DEV_SIGNING_KEY,
+          issuedAt: issuedAt || process.env.ARB_ISSUED_AT?.trim() || collectedAt,
+        });
+
+        const recommendationPath = path.resolve(process.cwd(), "artifacts", "fee-suggestions.recommendations.json");
+        const arbPath = path.resolve(process.cwd(), "artifacts", "fee-suggestions.arb.json");
+        await writeJsonDeterministic(recommendationPath, recommendation);
+        await writeJsonDeterministic(arbPath, arb);
+
+        sendJson(res, 200, {
+          ok: true,
+          route: "fee-suggestions",
+          privacyMode: "feature_only",
+          recommendationPath,
+          arbPath,
+          recommendation,
+          arb,
+        });
+        return;
+      }
+
       if (url.pathname === "/api/verify") {
         const arb = body.arb as ArbBundle | undefined;
         const provenance = body.sourceProvenance as SourceProvenanceReceipt | undefined;
@@ -346,7 +485,7 @@ export function createApiServer(): http.Server {
               ${JSON.stringify(recommendation, null, 2)}
               
               Provide a brief analysis (max 3 sentences) explaining why you agree or disagree with the recommendation.
-              Focus on liquidity imbalance, recent forward activity, and peer context.
+              Focus on liquidity imbalance, recent forward volume, peer fee competitiveness, and the historical successfully routed fee rate (forwardingEarningPpm).
             `
           });
 

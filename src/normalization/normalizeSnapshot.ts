@@ -10,6 +10,7 @@ interface ChannelAccumulator {
   forwardCountIn: number;
   forwardCountOut: number;
   revenueSat: number;
+  volumeOutSat: number;
   failedForwardCount: number;
   lastActivityTimestamp: number | null;
 }
@@ -69,6 +70,7 @@ const ensureChannelAccumulator = (
       forwardCountIn: 0,
       forwardCountOut: 0,
       revenueSat: 0,
+      volumeOutSat: 0,
       failedForwardCount: 0,
       lastActivityTimestamp: null,
     });
@@ -95,6 +97,7 @@ const buildForwardingStats = (snapshot: LightningSnapshot): Map<string, ChannelA
       const accOut = ensureChannelAccumulator(channelStats, channelOut);
       accOut.forwardCountOut += 1;
       accOut.revenueSat += feeSat;
+      accOut.volumeOutSat += toNumber(event.amtOut);
       accOut.lastActivityTimestamp = updateActivity(accOut.lastActivityTimestamp, ts);
     }
   }
@@ -231,6 +234,7 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         forwardCountIn: 0,
         forwardCountOut: 0,
         revenueSat: 0,
+        volumeOutSat: 0,
         failedForwardCount: 0,
         lastActivityTimestamp: null,
       };
@@ -260,6 +264,7 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         forwardCountOut: stats.forwardCountOut,
         forwardCountTotal: stats.forwardCountIn + stats.forwardCountOut,
         revenueSat: roundFixed(stats.revenueSat, 3),
+        forwardingEarningPpm: stats.volumeOutSat > 0 ? Math.round((stats.revenueSat / stats.volumeOutSat) * 1_000_000) : null,
         failedForwardCount: stats.failedForwardCount,
         lastActivityTimestamp: stats.lastActivityTimestamp,
         peerBetweennessCentrality:

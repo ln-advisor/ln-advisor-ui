@@ -27,6 +27,7 @@ export interface FeeRecommendationV1 {
     revenueBand: LevelBand;
     marketOutlier: "OVERPRICED" | "UNDERPRICED" | "NEUTRAL";
     peerSymmetry: "SYMMETRIC" | "ASYMMETRIC";
+    forwardingEarningPpm: number | null;
   };
   reasons: string[];
 }
@@ -48,8 +49,7 @@ export interface ForwardOpportunityV1 {
 }
 
 export interface ChannelOpeningRecommendationV1 {
-  pubkey: string;
-  alias: string;
+  peerRef: string;
   score: number;
   confidence: number;
   signals: {
@@ -344,6 +344,18 @@ const buildFeeRecommendation = (
     }
   }
 
+  // Proven Clearing Price
+  if (channel.forwardingEarningPpm !== null && channel.forwardCountOut > 0) {
+    const earningPpm = channel.forwardingEarningPpm;
+    if (earningPpm > ourOutPpm * 1.5) {
+      raiseScore += 2;
+      reasons.add("historical_clearing_price_high");
+    } else if (earningPpm < ourOutPpm * 0.5) {
+      lowerScore += 2;
+      reasons.add("historical_clearing_price_low");
+    }
+  }
+
   // Performance & Revenue Awareness
   if (revenueBand === "HIGH") {
     if (liquidityImbalance === "BALANCED") {
@@ -385,6 +397,7 @@ const buildFeeRecommendation = (
       revenueBand,
       marketOutlier,
       peerSymmetry,
+      forwardingEarningPpm: channel.forwardingEarningPpm,
     },
     reasons: [...reasons].sort(compareText),
   };
@@ -495,17 +508,17 @@ const buildChannelOpeningRecommendation = (
   const relWeight = reliabilityBand === "HIGH" ? 1.5 : reliabilityBand === "LOW" ? 0.5 : 1.0;
   
   const rawScore = (bc / cap) * relWeight;
-  const score = roundFixed(rawScore * 1000, 3);
+  const totalScore = roundFixed(rawScore * 1000, 3);
 
   if (centralityBand === "HIGH") reasons.push("high_network_centrality");
   if (reliabilityBand === "HIGH") reasons.push("proven_routing_reliability");
   if (capacityBand === "LOW" && potential.channelCount > 5) reasons.push("altruistic_liquidity_gap");
   if (potential.channelCount > 50) reasons.push("well_connected_hub");
+  const confidence = Math.min(100, (totalScore / 100) * 100);
 
   return {
-    pubkey: potential.pubkey,
-    alias: potential.alias,
-    score,
+    peerRef: potential.peerRef,
+    score: totalScore,
     confidence: roundFixed(Math.min(1, rawScore * 2), 3),
     signals: {
       centralityBand,

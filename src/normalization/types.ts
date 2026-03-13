@@ -13,6 +13,7 @@ export interface NormalizedChannelState {
   forwardCountOut: number;
   forwardCountTotal: number;
   revenueSat: number;
+  forwardingEarningPpm: number | null;
   failedForwardCount: number;
   lastActivityTimestamp: number | null;
   peerBetweennessCentrality: number | null;

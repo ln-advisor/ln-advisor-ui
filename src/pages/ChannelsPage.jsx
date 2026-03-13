@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
-    postRecommend,
-    postSnapshot,
+    postFeeSuggestion,
     postVerify,
     postAnalyzeGemini,
-    buildFrontendTelemetryEnvelope
 } from '../api/telemetryClient';
 import { normalizeSnapshot } from '../normalization/normalizeSnapshot';
 import { applyPrivacyPolicy } from '../privacy/applyPrivacyPolicy';
@@ -1237,10 +1235,10 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                         setPropsLoading(true);
                                         try {
                                             const rawTelemetry = {
-                                                nodeInfo: nodeInfo ? {
-                                                    alias: nodeInfo.alias,
-                                                    identityPubkey: nodePubkey
-                                                } : { alias: "Local Advisor Node" },
+                                                nodeInfo: {
+                                                    alias: nodeInfo?.alias || "Local Advisor Node",
+                                                    identityPubkey: nodePubkey || "self-node-pubkey"
+                                                },
                                                 channels: [{
                                                     chanId: String(selectedChannel.chanId || ''),
                                                     remotePubkey: selectedChannel.peerPubkey || '',
@@ -1251,8 +1249,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 }],
                                                 forwardingHistory: forwards.filter(f => {
                                                     const timestamp = Number(f.timestamp || 0);
-                                                    const fourteenDaysAgo = Math.floor((Date.now() - 14 * 24 * 60 * 60 * 1000) / 1000);
-                                                    const isRecent = timestamp >= fourteenDaysAgo;
+                                                    const sevenDaysAgo = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+                                                    const isRecent = timestamp >= sevenDaysAgo;
                                                     const isSelectedChannel = String(f.chanIdIn || f.chan_id_in) === String(selectedChannel.chanId) ||
                                                                             String(f.chanIdOut || f.chan_id_out) === String(selectedChannel.chanId);
                                                     return isRecent && isSelectedChannel;
@@ -1265,7 +1263,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 feePolicies: [
                                                     {
                                                         channelId: selectedChannel.chanId,
-                                                        directionPubKey: nodePubkey || "self",
+                                                        directionPubKey: nodePubkey || "self-node-pubkey",
                                                         feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
                                                     },
                                                     {
@@ -1300,16 +1298,21 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
 
                                             // Stage 2: Normalization
                                             const normalizedSnapshot = normalizeSnapshot({
-                                                nodeInfo,
+                                                nodeInfo: rawTelemetry.nodeInfo,
                                                 channels: [{
                                                     chanId: selectedChannel.chanId,
                                                     remotePubkey: selectedChannel.peerPubkey,
                                                     capacity: selectedChannel.capacity,
                                                     localBalance: selectedChannel.local,
                                                     remoteBalance: selectedChannel.remote,
-                                                    active: true
+                                                    active: true,
+                                                    networkInAvg: peerFeeStats?.correctedAvg ?? null,
+                                                    networkOutAvg: peerOutFeeStats?.correctedAvg ?? null
                                                 }],
                                                 peers,
+                                                forwardingHistory: rawTelemetry.forwardingHistory,
+                                                routingFailures: [], // Not currently collected per-channel
+                                                feePolicies: rawTelemetry.feePolicies,
                                                 graphNodes: [], // Minimal for single channel analysis
                                                 graphEdges: [],
                                                 nodeCentralityMetrics: [],
@@ -1320,21 +1323,26 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                             // Stage 3: PROPS Payload
                                             const propsSnapshot = applyPrivacyPolicy(normalizedSnapshot, 'feature_only');
 
-                                            setPipelineData({
+                                             setPipelineData({
                                                 rawMetadata: rawSnapshot,
                                                 normalizedMetadata: normalizedSnapshot,
                                                 propsPayload: propsSnapshot
                                             });
 
-                                            const telemetryEnvelope = buildFrontendTelemetryEnvelope(rawTelemetry);
-
-                                            // 1. Post Snapshot (completes the pipeline flow)
-                                            await postSnapshot(telemetryEnvelope);
-
-                                            // 2. Post Recommend (using feature_only as requested)
-                                            const res = await postRecommend({
-                                                telemetry: telemetryEnvelope,
-                                                privacyMode: 'feature_only'
+                                            // ── Fee Suggestion ────────────────────────────────────
+                                            // Route: POST /api/recommend/fee-suggestions
+                                            // Payload: PROPS feature_only state scoped to
+                                            // this single channel (liquidity ratios, forwarding
+                                            // counts, fee policies). No raw pubkeys or balances.
+                                            // peerFeeContext adds network avg fee stats collected
+                                            // from the peer's other channels (local to client only).
+                                            const res = await postFeeSuggestion({
+                                                propsPayload: propsSnapshot,
+                                                peerFeeContext: {
+                                                    networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                                                    networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                                                },
+                                                privacyMode: 'feature_only',
                                             });
 
                                             if (res && res.recommendation && res.recommendation.feeRecommendations && res.recommendation.feeRecommendations.length > 0) {
@@ -1344,7 +1352,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
 
                                                 setPropsRecommendation(rec);
 
-                                                // 3. Post Verify (Full pipeline)
+                                                // Post Verify (Full pipeline)
                                                 try {
                                                     const vRes = await postVerify(res.arb, res.sourceProvenance);
                                                     setVerifyResult(vRes);

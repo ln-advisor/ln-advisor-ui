@@ -32,6 +32,7 @@ export interface FeatureOnlyNodeState {
     forwardCountOut: number;
     forwardCountTotal: number;
     revenueSat: number;
+    forwardingEarningPpm: number | null;
     failedForwardCount: number;
     lastActivityTimestamp: number | null;
     peerBetweennessCentrality: number | null;
@@ -61,8 +62,7 @@ export interface FeatureOnlyNodeState {
     missionLastFailTimestamp: number | null;
   }>;
   potentialPeers: Array<{
-    pubkey: string;
-    alias: string;
+    peerRef: string;
     capacitySat: number;
     channelCount: number;
     betweennessCentrality: number | null;
@@ -108,6 +108,10 @@ export interface BandedNodeState {
     feeCompetitivenessBand: PrivacyBand;
     failedForwardPressure: "LOW" | "HIGH";
     missionReliabilityBand: PrivacyBand;
+    centralityBand: PrivacyBand;
+  }>;
+  potentialPeers: Array<{
+    peerRef: string;
     centralityBand: PrivacyBand;
   }>;
   totals: {
@@ -254,6 +258,7 @@ const toFeatureOnly = (normalized: NormalizedNodeState): FeatureOnlyNodeState =>
       forwardCountOut: channel.forwardCountOut,
       forwardCountTotal: channel.forwardCountTotal,
       revenueSat: channel.revenueSat,
+      forwardingEarningPpm: channel.forwardingEarningPpm,
       failedForwardCount: channel.failedForwardCount,
       lastActivityTimestamp: channel.lastActivityTimestamp,
       peerBetweennessCentrality: channel.peerBetweennessCentrality,
@@ -298,9 +303,10 @@ const toFeatureOnly = (normalized: NormalizedNodeState): FeatureOnlyNodeState =>
     channelCount: normalized.channelCount,
     channels,
     peers,
-    potentialPeers: [...normalized.potentialPeers].map((p) => ({
-      pubkey: p.pubkey,
-      alias: p.alias,
+    potentialPeers: [...normalized.potentialPeers]
+       .sort((a, b) => compareText(a.pubkey, b.pubkey))
+       .map((p, i) => ({
+      peerRef: makeRef("peer", peers.length + i),
       capacitySat: p.capacitySat,
       channelCount: p.channelCount,
       betweennessCentrality: p.betweennessCentrality,
@@ -396,6 +402,12 @@ const toBanded = (normalized: NormalizedNodeState): BandedNodeState => {
     channelCount: normalized.channelCount,
     channels,
     peers,
+    potentialPeers: [...normalized.potentialPeers]
+      .sort((a, b) => compareText(a.pubkey, b.pubkey))
+      .map((p, i) => ({
+        peerRef: makeRef("peer", peers.length + i),
+        centralityBand: classifyCentralityBand(p.betweennessCentrality, centralityThresholds),
+      })),
     totals: {
       channelsByLiquidityBand,
       channelsByPerformanceBand,
