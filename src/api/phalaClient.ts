@@ -1,4 +1,10 @@
-const PHALA_MINIMAL_APP_URL = String(import.meta.env.VITE_PHALA_MINIMAL_APP_URL || "").trim().replace(/\/+$/, "");
+import { DEFAULT_PHALA_MINIMAL_APP_URL } from "../config/phala";
+
+const PHALA_MINIMAL_APP_URL = String(
+  import.meta.env.VITE_PHALA_MINIMAL_APP_URL || DEFAULT_PHALA_MINIMAL_APP_URL
+)
+  .trim()
+  .replace(/\/+$/, "");
 const PHALA_UI_FLAG = String(import.meta.env.VITE_ENABLE_PHALA_VERIFIED_UI || "").trim().toLowerCase();
 const PHALA_DEV_PROXY_BASE = "/__phala";
 
@@ -83,7 +89,7 @@ export const getPhalaUiConfig = (): PhalaUiConfig => {
       enabled: true,
       available: false,
       appUrl: "",
-      reason: "VITE_PHALA_MINIMAL_APP_URL is not configured.",
+      reason: "Phala verified endpoint is not configured.",
     };
   }
 

@@ -1,19 +1,6 @@
 # Channels Verified Phala Flow
 
-This document describes the verified recommendation flow currently implemented on the `Channels` page.
-
-## Current scope
-
-This is the main Phala-backed UI flow in the app today.
-
-It applies to:
-- `Channels`
-
-It does not yet apply to:
-- `Node Analysis`
-- `Opening Recs`
-
-## High-level flow
+## Run steps
 
 1. Browser connects to the node through LNC
 2. Browser reads channel and node context locally
@@ -26,14 +13,12 @@ It does not yet apply to:
 9. UI renders:
    - recommendation
    - verification result
-   - trust metadata
+   - verification panel
 
-## Requests involved
+## Requests used by the verified flow
 
 In development, the browser uses the local Vite proxy:
 - `/__phala/...`
-
-That avoids browser CORS issues while still exposing the exact request plan in the UI.
 
 The verified flow uses:
 - `POST /api/recommend?full=true`
@@ -46,9 +31,7 @@ In the UI, these are visible in:
 - `PROPS Pipeline Explorer`
 - `Stage 4: Outgoing Browser Requests`
 
-## What the operator can inspect
-
-The `Channels` page now exposes:
+## UI sections to inspect
 
 ### Stage 1: Raw
 - locally collected data for the selected channel context
@@ -65,10 +48,7 @@ The `Channels` page now exposes:
 - exact method
 - request size in bytes
 
-This is important.
-It lets the operator verify what is actually leaving the browser.
-
-## What the trust panel shows
+## Verification panel fields
 
 After a successful verified run, the UI shows:
 - signer
@@ -77,21 +57,3 @@ After a successful verified run, the UI shows:
 - measurement status
 - attestation source
 - live evidence policy
-
-This is the operator-facing summary of the verification path.
-
-## Configuration
-
-The main frontend config value for this flow is:
-
-- `VITE_PHALA_MINIMAL_APP_URL`
-
-This is effectively deployment configuration for the verified provider.
-It is not something a normal user should need to change frequently.
-
-## Recommendation
-
-For the current product state, treat the verified `Channels` flow as:
-- the main attested recommendation path
-- the main privacy-inspection path
-- the strongest current demonstration of the Props model in the app
