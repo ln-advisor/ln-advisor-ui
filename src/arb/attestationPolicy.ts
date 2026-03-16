@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ArbBundle } from "./buildArb";
-import type { EnclaveExecutionMode } from "./attestation";
+import type { ArbAttestationQuoteFormat, EnclaveExecutionMode } from "./attestation";
 import type { SourceProvenanceReceipt } from "./provenance";
 
 export interface AttestationPolicy {
@@ -8,6 +8,8 @@ export interface AttestationPolicy {
   minExecutionMode: EnclaveExecutionMode;
   requireAttestation: boolean;
   allowedProviderIds?: string[];
+  allowedMeasurements?: string[];
+  allowedQuoteFormats?: ArbAttestationQuoteFormat[];
 }
 
 export interface AttestationPolicyResult {
@@ -81,6 +83,18 @@ export function evaluateArbAttestationPolicy(input: {
   if (policy.allowedProviderIds && policy.allowedProviderIds.length > 0) {
     if (!policy.allowedProviderIds.includes(attestation.providerId)) {
       errors.push(`Attestation provider ${attestation.providerId} is not allowed by policy.`);
+    }
+  }
+
+  if (policy.allowedMeasurements && policy.allowedMeasurements.length > 0) {
+    if (!policy.allowedMeasurements.includes(attestation.measurement)) {
+      errors.push("Attestation measurement is not allowed by policy.");
+    }
+  }
+
+  if (policy.allowedQuoteFormats && policy.allowedQuoteFormats.length > 0) {
+    if (!policy.allowedQuoteFormats.includes(attestation.quoteFormat)) {
+      errors.push(`Attestation quote format ${attestation.quoteFormat} is not allowed by policy.`);
     }
   }
 

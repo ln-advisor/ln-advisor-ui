@@ -1,0 +1,3 @@
+App URL: https://6845f776142d01f83a9491361221b640d458ca5e-8080.dstack-pha-prod5.phala.network
+Timestamp: 2026-03-12T17:15:56Z
+Reason: GET /info or GET /attestation returned non-success (common for plain Jupyter images).

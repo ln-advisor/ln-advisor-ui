@@ -1,34 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-
-const MOCK_RECOMMENDATION_API = async (telemetry) => {
-    return new Promise((resolve) => {
-        setTimeout(() => {
-            console.log('API Received Telemetry:', telemetry);
-
-            // Basic mock logic: if peer is charging a lot less than you are, decrease.
-            // If they are charging a lot more, increase.
-
-            let action = 'Hold';
-            let suggestedPpm = telemetry.myFeeRate || 0;
-            let confidence = 0.85;
-
-            if (telemetry.peerFeeRate && telemetry.myFeeRate) {
-                if (telemetry.peerFeeRate < telemetry.myFeeRate * 0.5) {
-                    action = 'Decrease';
-                    suggestedPpm = Math.floor(telemetry.myFeeRate * 0.8);
-                    confidence = 0.92;
-                } else if (telemetry.peerFeeRate > telemetry.myFeeRate * 1.5) {
-                    action = 'Increase';
-                    suggestedPpm = Math.floor(telemetry.myFeeRate * 1.2);
-                    confidence = 0.88;
-                }
-            }
-
-            resolve({ action, suggestedPpm, confidenceScore: confidence });
-        }, 1500);
-    });
-};
+import {
+    buildFrontendTelemetryEnvelope,
+    postRecommend,
+    postVerify,
+} from '../api/telemetryClient';
+import {
+    buildFeePoliciesFromChanInfoMap,
+    createChannelTelemetryPreview,
+    selectChannelPropsRecommendation,
+} from './channelsPropsFlow';
 
 const fmtSats = (n) => {
     const num = Number(n) || 0;
@@ -62,6 +43,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
     // Props Advisor Modal State
     const [propsLoading, setPropsLoading] = useState(false);
     const [propsRecommendation, setPropsRecommendation] = useState(null);
+    const [propsError, setPropsError] = useState(null);
     const [showPayload, setShowPayload] = useState(false);
     const [lastTelemetry, setLastTelemetry] = useState(null);
 
@@ -456,6 +438,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 });
                                                 setFeeModalOpen(true);
                                                 setPropsRecommendation(null);
+                                                setPropsError(null);
                                                 setShowPayload(false);
                                                 setLastTelemetry(null);
                                             }}
@@ -1139,45 +1122,84 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                 </div>
                                 <button
                                     onClick={async () => {
+                                        if (!lnc?.lnd?.lightning) {
+                                            setPropsError('Lightning connection is required before running the Props pipeline.');
+                                            return;
+                                        }
+
                                         setPropsLoading(true);
-                                        const telemetry = {
-                                            channelId: selectedChannel.chanId,
-                                            peerPubkey: selectedChannel.peerPubkey,
-                                            capacity: selectedChannel.capacity,
-                                            localBalance: selectedChannel.local,
-                                            remoteBalance: selectedChannel.remote,
-                                            routingStatsOutMsat: selectedChannel.stats.feeOutMsat,
-                                            routingStatsInMsat: selectedChannel.stats.feeInMsat,
-                                            myFeeRate: getFeeRatePpm(selectedChannel.myPolicy),
-                                            peerFeeRate: getFeeRatePpm(selectedChannel.peerPolicy),
+                                        setPropsError(null);
 
-                                            // Detailed Peer Inbound (Fees peer charges other nodes)
-                                            networkInAvg: peerFeeStats?.correctedAvg,
-                                            networkInMin: peerFeeStats?.min,
-                                            networkInMax: peerFeeStats?.max,
-                                            networkInMedian: peerFeeStats?.median,
+                                        try {
+                                            const previewTelemetry = createChannelTelemetryPreview({
+                                                selectedChannel,
+                                                getFeeRatePpm,
+                                                peerFeeStats,
+                                                peerOutFeeStats,
+                                                peerFeeSeries,
+                                            });
+                                            setLastTelemetry(previewTelemetry);
 
-                                            // Detailed Peer Outbound (Fees other nodes charge peer)
-                                            networkOutAvg: peerOutFeeStats?.correctedAvg,
-                                            networkOutMin: peerOutFeeStats?.min,
-                                            networkOutMax: peerOutFeeStats?.max,
-                                            networkOutMedian: peerOutFeeStats?.median,
+                                            const nodeInfo = await lnc.lnd.lightning.getInfo();
+                                            const telemetryEnvelope = buildFrontendTelemetryEnvelope({
+                                                namespace: 'tapvolt',
+                                                nodeInfo,
+                                                channels: nodeChannels,
+                                                forwardingHistory: forwards,
+                                                routingFailures: [],
+                                                feePolicies: buildFeePoliciesFromChanInfoMap(chanInfoMap),
+                                                peers: [],
+                                                graphSnapshot: null,
+                                                missionControl: { pairs: [] },
+                                                nodeMetrics: { betweennessCentrality: {} },
+                                            });
 
-                                            // Full raw macro distribution arrays for advanced TEE inference
-                                            peerFeeSeries: { ...peerFeeSeries }
-                                        };
-                                        setLastTelemetry(telemetry);
-                                        const res = await MOCK_RECOMMENDATION_API(telemetry);
-                                        setPropsRecommendation(res);
-                                        setPropsLoading(false);
+                                            const recommendResponse = await postRecommend({
+                                                telemetry: telemetryEnvelope,
+                                                privacyMode: 'feature_only',
+                                            });
+                                            const verifyResponse = await postVerify(
+                                                recommendResponse?.arb,
+                                                recommendResponse?.sourceProvenance
+                                            );
+                                            const mappedRecommendation = selectChannelPropsRecommendation({
+                                                recommendResponse,
+                                                verifyResponse,
+                                                selectedChannelId: selectedChannel.chanId,
+                                                nodeChannels,
+                                                fallbackFeePpm: getFeeRatePpm(selectedChannel.myPolicy),
+                                            });
+
+                                            if (!mappedRecommendation) {
+                                                throw new Error('Props API returned no fee recommendation for the selected channel.');
+                                            }
+
+                                            setPropsRecommendation(mappedRecommendation);
+                                        } catch (e) {
+                                            setPropsRecommendation(null);
+                                            setPropsError(e?.message || 'Props API request failed.');
+                                        } finally {
+                                            setPropsLoading(false);
+                                        }
                                     }}
                                     disabled={propsLoading}
                                     className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-md ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
                                     style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
                                 >
-                                    {propsLoading ? 'Running Model...' : propsRecommendation ? 'Re-run Analysis' : 'Analyze Channel'}
+                                    {propsLoading ? 'Running Props...' : propsRecommendation ? 'Re-run Analysis' : 'Analyze Channel'}
                                 </button>
                             </div>
+
+                            {propsError && (
+                                <div className="px-5 py-3 text-xs border-b"
+                                    style={{
+                                        color: darkMode ? '#fda4af' : '#9f1239',
+                                        backgroundColor: darkMode ? 'rgba(244,63,94,0.08)' : 'rgba(244,63,94,0.1)',
+                                        borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+                                    }}>
+                                    {propsError}
+                                </div>
+                            )}
 
                             {propsRecommendation && (
                                 <div className="p-5 animate-fade-in">
@@ -1206,21 +1228,58 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Model Confidence</span>
                                                 <span className="font-mono text-sm text-white/70">{(propsRecommendation.confidenceScore * 100).toFixed(1)}%</span>
                                             </div>
+
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Verification</span>
+                                                <span className="font-mono text-xs" style={{ color: propsRecommendation.verifyOk ? '#22c55e' : '#f97316' }}>
+                                                    {propsRecommendation.verifyOk ? 'ARB verified' : 'Verification failed'}
+                                                </span>
+                                            </div>
+
+                                            {propsRecommendation.reasonCodes?.length > 0 && (
+                                                <div>
+                                                    <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Signals</div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {propsRecommendation.reasonCodes.map((reason) => (
+                                                            <span
+                                                                key={reason}
+                                                                className="px-2 py-1 rounded-full text-[10px] font-mono"
+                                                                style={{
+                                                                    backgroundColor: darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                                                                    color: 'var(--text-secondary)',
+                                                                }}
+                                                            >
+                                                                {reason}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="w-full md:w-px h-px md:h-24 bg-white/10"></div>
 
                                         <div className="flex-1 w-full">
                                             <button
+                                                disabled={!propsRecommendation.verifyOk}
                                                 className="w-full py-3 rounded-xl text-sm font-bold shadow-lg transition-all hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-2"
-                                                style={{ background: 'var(--accent-1)', color: '#fff' }}
+                                                style={{
+                                                    background: propsRecommendation.verifyOk ? 'var(--accent-1)' : 'rgba(148,163,184,0.35)',
+                                                    color: '#fff',
+                                                    cursor: propsRecommendation.verifyOk ? 'pointer' : 'not-allowed',
+                                                    opacity: propsRecommendation.verifyOk ? 1 : 0.7,
+                                                }}
                                             >
                                                 <span>Execute via OpenClaw</span>
                                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                                 </svg>
                                             </button>
-                                            <p className="text-center text-[10px] mt-2 opacity-50">Requires Arb Signature Verification</p>
+                                            <p className="text-center text-[10px] mt-2 opacity-50">
+                                                {propsRecommendation.verifyOk
+                                                    ? `Ready after ${propsRecommendation.signingMode || 'unknown'} verification`
+                                                    : 'Blocked until ARB verification passes'}
+                                            </p>
                                         </div>
 
                                     </div>

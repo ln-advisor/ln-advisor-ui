@@ -4,6 +4,7 @@ import type { LightningSnapshot } from "../src/connectors/types";
 import { normalizeSnapshot } from "../src/normalization/normalizeSnapshot";
 import { applyPrivacyPolicy } from "../src/privacy/applyPrivacyPolicy";
 import { scoreNodeState } from "../src/scoring/scoreNodeState";
+import { DEFAULT_PINNED_MODEL_MANIFEST } from "../src/scoring/modelManifest";
 import { generateSourceProvenanceReceipt } from "../src/arb/provenance";
 import { buildArb } from "../src/arb/buildArb";
 import { verifyArb } from "../src/arb/verifyArb";
@@ -182,6 +183,8 @@ const buildRecommendationProjection = (
     recommendationType: arb.recommendationType,
     privacyPolicyId: arb.privacyPolicyId,
     modelVersion: arb.modelVersion,
+    modelManifestHash: arb.modelManifestHash,
+    modelPinningMode: arb.modelPinningMode,
     signatureAlgorithm: arb.signature.algorithm,
     verificationPass: verifyPass,
   },
@@ -765,6 +768,7 @@ const writeScenario = async (scenario: string, rawSnapshot: LightningSnapshot): 
     collectedAt: normalized.collectedAt,
   });
   const provenance = generateSourceProvenanceReceipt(rawSnapshot, normalized, {
+    modelManifest: DEFAULT_PINNED_MODEL_MANIFEST,
     privacyTransformedSnapshot: featureOnly,
   });
   const arb = buildArb({
@@ -772,6 +776,7 @@ const writeScenario = async (scenario: string, rawSnapshot: LightningSnapshot): 
     sourceProvenance: provenance,
     privacyPolicyId: "feature_only",
     devSigningKey: DEV_SIGNING_KEY,
+    modelManifest: DEFAULT_PINNED_MODEL_MANIFEST,
     issuedAt: FIXED_ISSUED_AT,
     ttlSeconds: 86_400,
   });

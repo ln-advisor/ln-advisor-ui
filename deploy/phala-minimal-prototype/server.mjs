@@ -1,0 +1,1546 @@
+import http from "node:http";
+import crypto from "node:crypto";
+import { access } from "node:fs/promises";
+
+const PORT = Number.parseInt(process.env.API_PORT || "8787", 10);
+const SERVICE_NAME = process.env.PROTOTYPE_SERVICE_NAME || "ln-advisor-phala-minimal";
+
+const DEFAULT_PROTOTYPE_ARB_SIGNING_KEY = "prototype-dev-signing-key-change-me";
+const PROTOTYPE_ARB_SIGNING_KEY =
+  process.env.PROTOTYPE_ARB_SIGNING_KEY || DEFAULT_PROTOTYPE_ARB_SIGNING_KEY;
+const PROTOTYPE_ARB_KEY_ID = "prototype-dev-hmac-v1";
+const PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY = process.env.PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY === "true";
+
+const PROTOTYPE_SIGNER_PROVIDER_TYPE = (process.env.PROTOTYPE_SIGNER_PROVIDER_TYPE || "env_hmac").trim();
+const PROTOTYPE_SIGNER_PROVIDER_ID =
+  (process.env.PROTOTYPE_SIGNER_PROVIDER_ID || process.env.PROTOTYPE_ARB_SIGNER_PROVIDER_ID || "prototype-env-signer-v1").trim();
+const PROTOTYPE_SIGNER_PROVIDER_UNAVAILABLE_REASON =
+  (process.env.PROTOTYPE_SIGNER_PROVIDER_UNAVAILABLE_REASON ||
+    "Signer provider is not available in the minimal prototype.").trim();
+const PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID =
+  (process.env.PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID || PROTOTYPE_SIGNER_PROVIDER_ID).trim();
+const PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE =
+  (process.env.PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE || PROTOTYPE_SIGNER_PROVIDER_TYPE).trim();
+
+const PROTOTYPE_ATTESTATION_INCLUDE = process.env.PROTOTYPE_ATTESTATION_INCLUDE !== "false";
+const PROTOTYPE_ATTESTATION_PROVIDER_ID =
+  (process.env.PROTOTYPE_ATTESTATION_PROVIDER_ID || "phala-cloud").trim();
+const PROTOTYPE_ATTESTATION_EXECUTION_MODE =
+  (process.env.PROTOTYPE_ATTESTATION_EXECUTION_MODE || "tee_verified").trim();
+const PROTOTYPE_ATTESTATION_QUOTE_FORMAT =
+  (process.env.PROTOTYPE_ATTESTATION_QUOTE_FORMAT || "tdx_quote").trim();
+const PROTOTYPE_ATTESTATION_MEASUREMENT =
+  (process.env.PROTOTYPE_ATTESTATION_MEASUREMENT || "prototype-measurement-v1").trim();
+const PROTOTYPE_ATTESTATION_QUOTE =
+  process.env.PROTOTYPE_ATTESTATION_QUOTE || "prototype-phala-quote";
+const PROTOTYPE_ATTESTATION_ISSUED_AT =
+  (process.env.PROTOTYPE_ATTESTATION_ISSUED_AT || "2026-03-13T00:00:00Z").trim();
+const PROTOTYPE_ATTESTATION_NONCE =
+  (process.env.PROTOTYPE_ATTESTATION_NONCE || "prototype-attestation-nonce").trim();
+const PROTOTYPE_ATTESTATION_SOURCE =
+  (process.env.PROTOTYPE_ATTESTATION_SOURCE || "prototype_env").trim();
+const PROTOTYPE_DSTACK_ENDPOINT =
+  (process.env.PROTOTYPE_DSTACK_ENDPOINT || process.env.DSTACK_SIMULATOR_ENDPOINT || "").trim().replace(/\/+$/, "");
+const PROTOTYPE_DSTACK_SOCKET_PATH =
+  (process.env.PROTOTYPE_DSTACK_SOCKET_PATH || "").trim();
+const PROTOTYPE_DSTACK_PRIMARY_SOCKET_PATH =
+  (process.env.PROTOTYPE_DSTACK_PRIMARY_SOCKET_PATH || "/var/run/dstack.sock").trim();
+const PROTOTYPE_DSTACK_LEGACY_SOCKET_PATH =
+  (process.env.PROTOTYPE_DSTACK_LEGACY_SOCKET_PATH || "/var/run/tappd.sock").trim();
+const PROTOTYPE_RUNTIME_MEASUREMENT_PLACEHOLDER =
+  (process.env.PROTOTYPE_RUNTIME_MEASUREMENT_PLACEHOLDER || "runtime-discovery-placeholder").trim();
+
+const PROTOTYPE_VERIFY_REQUIRE_ATTESTATION = process.env.PROTOTYPE_VERIFY_REQUIRE_ATTESTATION === "true";
+const PROTOTYPE_VERIFY_MIN_EXECUTION_MODE =
+  (process.env.PROTOTYPE_VERIFY_MIN_EXECUTION_MODE || "local_dev").trim();
+const PROTOTYPE_VERIFY_ALLOWED_ATTESTATION_PROVIDER_ID =
+  (process.env.PROTOTYPE_VERIFY_ALLOWED_ATTESTATION_PROVIDER_ID || PROTOTYPE_ATTESTATION_PROVIDER_ID).trim();
+const PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT =
+  (process.env.PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT || PROTOTYPE_ATTESTATION_MEASUREMENT).trim();
+const PROTOTYPE_VERIFY_ALLOWED_QUOTE_FORMAT =
+  (process.env.PROTOTYPE_VERIFY_ALLOWED_QUOTE_FORMAT || PROTOTYPE_ATTESTATION_QUOTE_FORMAT).trim();
+const PROTOTYPE_VERIFY_REQUIRE_REPORT_DATA_BINDING =
+  process.env.PROTOTYPE_VERIFY_REQUIRE_REPORT_DATA_BINDING !== "false";
+const PROTOTYPE_VERIFY_REQUIRE_LIVE_APP_EVIDENCE =
+  process.env.PROTOTYPE_VERIFY_REQUIRE_LIVE_APP_EVIDENCE === "true";
+const PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION =
+  process.env.PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION === "true";
+const PROTOTYPE_PHALA_API_BASE_URL =
+  (process.env.PHALA_CLOUD_API_BASE_URL || "https://cloud-api.phala.network/api/v1").trim().replace(/\/+$/, "");
+const PROTOTYPE_PHALA_API_VERSION =
+  (process.env.PHALA_API_VERSION || "2026-01-21").trim();
+const PROTOTYPE_PHALA_API_KEY =
+  (process.env.PHALA_CLOUD_API_KEY || process.env.PHALA_API_KEY || "").trim();
+
+const PROTOTYPE_SOURCE_RECEIPT_COLLECTED_AT =
+  (process.env.PROTOTYPE_SOURCE_RECEIPT_COLLECTED_AT || "2026-03-13T00:00:00Z").trim();
+const PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT =
+  process.env.PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT === "true";
+
+const compareText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+const sortObjectKeysDeep = (value) => {
+  if (Array.isArray(value)) return value.map((item) => sortObjectKeysDeep(item));
+  if (value && typeof value === "object") {
+    const sorted = {};
+    for (const key of Object.keys(value).sort(compareText)) {
+      sorted[key] = sortObjectKeysDeep(value[key]);
+    }
+    return sorted;
+  }
+  return value;
+};
+
+const sendJson = (res, statusCode, payload) => {
+  res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(sortObjectKeysDeep(payload), null, 2) + "\n");
+};
+
+const parseBody = async (req) => {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const stableStringify = (value) => JSON.stringify(sortObjectKeysDeep(value));
+const sha256Hex = (value) => crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
+const sha256TextHex = (value) => crypto.createHash("sha256").update(String(value), "utf8").digest("hex");
+const hmacSha256Hex = (value, key) =>
+  crypto.createHmac("sha256", key).update(typeof value === "string" ? value : stableStringify(value)).digest("hex");
+const normalizeHex = (value) => String(value || "").trim().toLowerCase().replace(/^0x/, "");
+const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const readStringField = (record, keys) => {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+};
+const readRecordField = (record, keys) => {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (isRecord(value)) return value;
+  }
+  return null;
+};
+const wantsFullPayload = (url) => url.searchParams.get("full") === "true";
+const shortenLargeString = (value, prefixLength = 16, suffixLength = 12) => {
+  const text = String(value || "");
+  if (text.length <= prefixLength + suffixLength + 3) return text;
+  return `${text.slice(0, prefixLength)}...${text.slice(-suffixLength)}`;
+};
+const summarizeLargeString = (value) => ({
+  preview: shortenLargeString(value),
+  length: String(value || "").length,
+  sha256: sha256TextHex(String(value || "")),
+});
+const compactInfoPayload = (payload) => {
+  const appCompose = payload?.tcb_info?.app_compose;
+  if (typeof appCompose !== "string") return payload;
+  const { app_compose, ...restTcbInfo } = payload.tcb_info;
+
+  return {
+    ...payload,
+    tcb_info: {
+      ...restTcbInfo,
+      app_compose_preview: shortenLargeString(appCompose, 24, 20),
+      app_compose_length: appCompose.length,
+      compose_hash: restTcbInfo.compose_hash || sha256TextHex(appCompose),
+    },
+  };
+};
+const compactAppAttestationPayload = (payload) => {
+  const quote = payload?.quote;
+  if (typeof quote !== "string") return payload;
+  const { quote: _quote, ...rest } = payload;
+
+  return {
+    ...rest,
+    quote_preview: shortenLargeString(quote),
+    quote_length: quote.length,
+    quote_hash: sha256Hex({ quote }),
+  };
+};
+const compactArbPayload = (arb) => {
+  if (!arb || typeof arb !== "object") return arb;
+  const attestation = arb.attestation;
+  if (!attestation || typeof attestation !== "object" || typeof attestation.quote !== "string") return arb;
+  const { quote, ...restAttestation } = attestation;
+
+  return {
+    ...arb,
+    attestation: {
+      ...restAttestation,
+      quote_preview: shortenLargeString(quote),
+      quote_length: quote.length,
+    },
+  };
+};
+const compactVerifyResponse = (payload) => {
+  const compacted = { ...payload };
+  const liveQuote = compacted?.expected?.liveAppEvidence?.quote;
+
+  if (typeof liveQuote === "string") {
+    const { quote, ...restLiveEvidence } = compacted.expected.liveAppEvidence;
+    compacted.expected = {
+      ...compacted.expected,
+      liveAppEvidence: {
+        ...restLiveEvidence,
+        quote_preview: shortenLargeString(liveQuote),
+        quote_length: liveQuote.length,
+      },
+    };
+  }
+
+  const rawCloud = compacted?.cloudVerification?.raw;
+  if (rawCloud && typeof rawCloud === "object") {
+    const rawQuote = rawCloud?.quote && typeof rawCloud.quote === "object" ? rawCloud.quote : null;
+    compacted.cloudVerification = {
+      ...compacted.cloudVerification,
+      raw: {
+        success: rawCloud.success === true,
+        checksum: typeof rawCloud.checksum === "string" ? rawCloud.checksum : null,
+        id: typeof rawCloud.id === "string" ? rawCloud.id : null,
+        proof_of_cloud: rawCloud.proof_of_cloud === true,
+        uploaded_at: rawCloud.uploaded_at ?? null,
+        quote: rawQuote
+          ? {
+              verified: rawQuote.verified === true,
+              header: rawQuote.header && typeof rawQuote.header === "object"
+                ? {
+                    version: rawQuote.header.version ?? null,
+                    tee_type: rawQuote.header.tee_type ?? null,
+                    ak_type: rawQuote.header.ak_type ?? null,
+                    qe_vendor: rawQuote.header.qe_vendor ?? null,
+                    user_data_preview:
+                      typeof rawQuote.header.user_data === "string"
+                        ? shortenLargeString(rawQuote.header.user_data)
+                        : null,
+                  }
+                : null,
+              body: rawQuote.body && typeof rawQuote.body === "object"
+                ? {
+                    mrtd: rawQuote.body.mrtd ?? null,
+                    rtmr3: rawQuote.body.rtmr3 ?? null,
+                    reportdata_preview:
+                      typeof rawQuote.body.reportdata === "string"
+                        ? shortenLargeString(rawQuote.body.reportdata)
+                        : null,
+                  }
+                : null,
+              cert_data_length:
+                typeof rawQuote.cert_data === "string" ? rawQuote.cert_data.length : null,
+            }
+          : null,
+      },
+    };
+  }
+
+  return compacted;
+};
+
+const roundFixed = (value, decimals) => {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+};
+
+const makeRef = (prefix, index) => `${prefix}_${String(index + 1).padStart(4, "0")}`;
+
+const modeRank = (mode) => {
+  if (mode === "tee_verified") return 2;
+  if (mode === "tee_simulated") return 1;
+  return 0;
+};
+
+const isPlaceholderRuntimeMeasurement = (value) =>
+  String(value || "").trim() === PROTOTYPE_RUNTIME_MEASUREMENT_PLACEHOLDER;
+
+const buildRuntimeMeasurementPolicyStatus = () => ({
+  allowedMeasurement: PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT,
+  placeholderDetected: isPlaceholderRuntimeMeasurement(PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT),
+  pinned:
+    !isPlaceholderRuntimeMeasurement(PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT) &&
+    PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT.length > 0,
+  attestationSource: PROTOTYPE_ATTESTATION_SOURCE,
+  pinRecommended: canUseDstackRuntimeAttestation() && isPlaceholderRuntimeMeasurement(PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT),
+});
+
+const classifyLiquidityBand = (localBalanceRatio) => {
+  if (localBalanceRatio < 0.33) return "LOW";
+  if (localBalanceRatio < 0.67) return "MEDIUM";
+  return "HIGH";
+};
+
+const classifyChannelPerformanceBand = (channel) => {
+  const score = channel.forwardCount + Math.floor(channel.revenueSat / 100) - channel.failedForwardCount * 2;
+  if (score <= 1) return "LOW";
+  if (score <= 4) return "MEDIUM";
+  return "HIGH";
+};
+
+const classifyFeeCompetitivenessBand = (outboundFeePpm) => {
+  if (outboundFeePpm === null || outboundFeePpm === undefined) return "MEDIUM";
+  if (outboundFeePpm <= 200) return "HIGH";
+  if (outboundFeePpm <= 800) return "MEDIUM";
+  return "LOW";
+};
+
+const classifyFailedForwardPressure = (failedForwardCount) => (failedForwardCount > 0 ? "HIGH" : "LOW");
+
+const runtimeState = {
+  lastArbDigest: null,
+};
+
+const ZERO_REPORT_DATA_HEX = "00".repeat(32);
+
+const normalizeTelemetry = (telemetry) => {
+  const channels = Array.isArray(telemetry?.channels) ? telemetry.channels : [];
+  const sanitizedChannels = channels.map((channel, index) => {
+    const localBalanceSat = Number(channel?.localBalanceSat || 0);
+    const remoteBalanceSat = Number(channel?.remoteBalanceSat || 0);
+    const capacitySat = localBalanceSat + remoteBalanceSat;
+    const denominator = capacitySat > 0 ? capacitySat : 1;
+
+    return {
+      sortChannelId: String(channel?.channelId || `channel-${index + 1}`),
+      sortPeerPubkey: String(channel?.peerPubkey || `peer-${index + 1}`),
+      active: Boolean(channel?.active),
+      localBalanceRatio: roundFixed(localBalanceSat / denominator, 6),
+      remoteBalanceRatio: roundFixed(remoteBalanceSat / denominator, 6),
+      outboundFeePpm:
+        channel?.outboundFeePpm === null || channel?.outboundFeePpm === undefined
+          ? null
+          : Number(channel.outboundFeePpm),
+      forwardCount: Number(channel?.forwardCount || 0),
+      revenueSat: Number(channel?.revenueSat || 0),
+      failedForwardCount: Number(channel?.failedForwardCount || 0),
+    };
+  });
+
+  const sortedPeers = [...new Set(sanitizedChannels.map((channel) => channel.sortPeerPubkey))].sort(compareText);
+  const peerRefMap = new Map(sortedPeers.map((peerPubkey, index) => [peerPubkey, makeRef("peer", index)]));
+
+  const sortedChannels = [...sanitizedChannels].sort((left, right) => compareText(left.sortChannelId, right.sortChannelId));
+  const channelRefMap = new Map(sortedChannels.map((channel, index) => [channel.sortChannelId, makeRef("channel", index)]));
+
+  return {
+    nodeAlias: String(telemetry?.nodeAlias || "prototype-node"),
+    channels: sortedChannels.map((channel) => ({
+      channelRef: channelRefMap.get(channel.sortChannelId) || "channel_0000",
+      peerRef: peerRefMap.get(channel.sortPeerPubkey) || "peer_0000",
+      active: channel.active,
+      localBalanceRatio: channel.localBalanceRatio,
+      remoteBalanceRatio: channel.remoteBalanceRatio,
+      outboundFeePpm: channel.outboundFeePpm,
+      forwardCount: channel.forwardCount,
+      revenueSat: channel.revenueSat,
+      failedForwardCount: channel.failedForwardCount,
+    })),
+  };
+};
+
+const toFeatureOnly = (telemetry) => {
+  const normalized = normalizeTelemetry(telemetry);
+  return {
+    schemaVersion: "prototype-privacy-node-state-v1",
+    privacyMode: "feature_only",
+    sourceSchemaVersion: "prototype-telemetry-v1",
+    nodeAlias: normalized.nodeAlias,
+    channelCount: normalized.channels.length,
+    channels: normalized.channels,
+  };
+};
+
+const toBanded = (telemetry) => {
+  const normalized = normalizeTelemetry(telemetry);
+  const channels = normalized.channels.map((channel) => ({
+    channelRef: channel.channelRef,
+    peerRef: channel.peerRef,
+    active: channel.active,
+    liquidityBand: classifyLiquidityBand(channel.localBalanceRatio),
+    channelPerformanceBand: classifyChannelPerformanceBand(channel),
+    feeCompetitivenessBand: classifyFeeCompetitivenessBand(channel.outboundFeePpm),
+    failedForwardPressure: classifyFailedForwardPressure(channel.failedForwardCount),
+  }));
+
+  return {
+    schemaVersion: "prototype-privacy-node-state-v1",
+    privacyMode: "banded",
+    sourceSchemaVersion: "prototype-telemetry-v1",
+    nodeAlias: normalized.nodeAlias,
+    channelCount: channels.length,
+    channels,
+  };
+};
+
+const applyPrototypePrivacyTransform = (telemetry, privacyMode) => {
+  if (privacyMode === "banded") return toBanded(telemetry);
+  return toFeatureOnly(telemetry);
+};
+
+const buildPrototypeAppCompose = () => ({
+  schemaVersion: "prototype-app-compose-v1",
+  serviceName: SERVICE_NAME,
+  signerProvider: {
+    providerId: SIGNER_PROVIDER.providerId,
+    providerType: SIGNER_PROVIDER.providerType,
+  },
+  attestationDefaults: {
+    providerId: PROTOTYPE_ATTESTATION_PROVIDER_ID,
+    executionMode: PROTOTYPE_ATTESTATION_EXECUTION_MODE,
+    quoteFormat: PROTOTYPE_ATTESTATION_QUOTE_FORMAT,
+    measurement: PROTOTYPE_ATTESTATION_MEASUREMENT,
+  },
+  verifyPolicy: {
+    requireAttestation: PROTOTYPE_VERIFY_REQUIRE_ATTESTATION,
+    minExecutionMode: PROTOTYPE_VERIFY_MIN_EXECUTION_MODE,
+    requireReportDataBinding: PROTOTYPE_VERIFY_REQUIRE_REPORT_DATA_BINDING,
+    requireSourceReceipt: PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT,
+    requireLiveAppEvidence: PROTOTYPE_VERIFY_REQUIRE_LIVE_APP_EVIDENCE,
+    requireCloudAppVerification: PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION,
+  },
+});
+
+const buildPrototypeAppComposeString = () => stableStringify(buildPrototypeAppCompose());
+
+const canUseDstackRuntimeAttestation = () =>
+  PROTOTYPE_ATTESTATION_SOURCE === "dstack_runtime" || PROTOTYPE_ATTESTATION_SOURCE === "auto";
+
+const listPrototypeDstackSocketCandidates = () => {
+  if (PROTOTYPE_DSTACK_SOCKET_PATH) return [PROTOTYPE_DSTACK_SOCKET_PATH];
+  return [...new Set([PROTOTYPE_DSTACK_PRIMARY_SOCKET_PATH, PROTOTYPE_DSTACK_LEGACY_SOCKET_PATH].filter(Boolean))];
+};
+
+const fileExists = async (filePath) => {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readJsonFromHttpResponse = (responseText, context) => {
+  try {
+    const parsed = JSON.parse(responseText);
+    return isRecord(parsed) ? parsed : {};
+  } catch (error) {
+    throw new Error(`Failed to parse ${context} JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+const requestJsonToHttpUrl = async (baseUrl, pathName, method, body) => {
+  const response = await fetch(`${baseUrl}${pathName}`, {
+    method,
+    headers: {
+      Accept: "application/json",
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Dstack HTTP request failed (${response.status}) ${pathName}: ${text}`);
+  }
+  return readJsonFromHttpResponse(text, `Dstack HTTP ${pathName}`);
+};
+
+const requestJsonOverUnixSocket = (socketPath, pathName, method, body) =>
+  new Promise((resolve, reject) => {
+    const request = http.request(
+      {
+        socketPath,
+        path: pathName,
+        method,
+        headers: {
+          Accept: "application/json",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        response.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          if ((response.statusCode || 500) < 200 || (response.statusCode || 500) >= 300) {
+            reject(new Error(`Dstack socket request failed (${response.statusCode || 500}) ${pathName}: ${text}`));
+            return;
+          }
+          try {
+            resolve(readJsonFromHttpResponse(text, `Dstack socket ${pathName}`));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+    );
+
+    request.on("error", reject);
+    if (body !== undefined) request.write(JSON.stringify(body));
+    request.end();
+  });
+
+const requestPrototypeDstack = async (pathName, body, method = "POST") => {
+  if (PROTOTYPE_DSTACK_ENDPOINT) {
+    return requestJsonToHttpUrl(PROTOTYPE_DSTACK_ENDPOINT, pathName, method, body);
+  }
+
+  const socketCandidates = listPrototypeDstackSocketCandidates();
+  for (const socketPath of socketCandidates) {
+    if (!(await fileExists(socketPath))) continue;
+    try {
+      return await requestJsonOverUnixSocket(socketPath, pathName, method, body);
+    } catch (error) {
+      if (socketPath === socketCandidates[socketCandidates.length - 1]) throw error;
+    }
+  }
+
+  throw new Error("No dstack socket or endpoint is available.");
+};
+
+const fetchPrototypeDstackInfo = async () => {
+  try {
+    return await requestPrototypeDstack("/Info", undefined, "POST");
+  } catch (error) {
+    return requestPrototypeDstack("/Info", undefined, "GET").catch(() => {
+      throw error;
+    });
+  }
+};
+
+const fetchPrototypeDstackQuote = async (reportDataHex) =>
+  requestPrototypeDstack("/GetQuote", {
+    reportData: `0x${normalizeHex(reportDataHex || ZERO_REPORT_DATA_HEX)}`,
+  });
+
+const extractPrototypeMeasurementFromRuntimeInfo = (runtimeInfo) => {
+  const tcbInfo = readRecordField(runtimeInfo, ["tcb_info", "tcbInfo"]) || {};
+  return (
+    readStringField(tcbInfo, ["mrtd", "measurement", "mr_td", "mrenclave"]) ||
+    readStringField(runtimeInfo, ["measurement", "mrtd"]) ||
+    null
+  );
+};
+
+const extractPrototypeMeasurementFromCloudVerification = (cloudVerification) => {
+  const raw = isRecord(cloudVerification?.raw) ? cloudVerification.raw : {};
+  const quote = readRecordField(raw, ["quote"]);
+  const quoteBody = readRecordField(quote, ["body"]);
+  return (
+    readStringField(quoteBody, ["mrtd", "measurement", "mr_td", "mrenclave"]) ||
+    readStringField(quote, ["mrtd", "measurement"]) ||
+    readStringField(raw, ["mrtd", "measurement"]) ||
+    null
+  );
+};
+
+const extractPrototypeAppComposeFromRuntimeInfo = (runtimeInfo) => {
+  const tcbInfo = readRecordField(runtimeInfo, ["tcb_info", "tcbInfo"]) || {};
+  return readStringField(tcbInfo, ["app_compose", "appCompose"]);
+};
+
+const extractPrototypeComposeHashFromRuntimeInfo = (runtimeInfo) => {
+  const tcbInfo = readRecordField(runtimeInfo, ["tcb_info", "tcbInfo"]) || {};
+  return (
+    readStringField(tcbInfo, ["compose_hash", "composeHash"]) ||
+    readStringField(runtimeInfo, ["compose_hash", "composeHash"])
+  );
+};
+
+const buildPrototypeSyntheticInfoPayload = () => ({
+  schemaVersion: "prototype-app-info-v1",
+  service: SERVICE_NAME,
+  tcb_info: {
+    app_compose: buildPrototypeAppComposeString(),
+  },
+  signerProvider: {
+    providerId: SIGNER_PROVIDER.providerId,
+    providerType: SIGNER_PROVIDER.providerType,
+  },
+});
+
+const buildPrototypeSyntheticAttestationPayload = () => {
+  const appCompose = buildPrototypeAppComposeString();
+  const composeHash = sha256TextHex(appCompose);
+  return {
+    schemaVersion: "prototype-app-attestation-v1",
+    quote: PROTOTYPE_ATTESTATION_QUOTE,
+    report_data: runtimeState.lastArbDigest,
+    event_log: [
+      {
+        imr: 3,
+        event: "app-compose-hash",
+        digest: composeHash,
+      },
+    ],
+    provider_id: PROTOTYPE_ATTESTATION_PROVIDER_ID,
+    measurement: PROTOTYPE_ATTESTATION_MEASUREMENT,
+  };
+};
+
+const resolvePrototypeRuntimeAttestationEvidence = async (reportDataHex) => {
+  if (!canUseDstackRuntimeAttestation()) {
+    return {
+      source: "prototype_env",
+      infoPayload: buildPrototypeSyntheticInfoPayload(),
+      attestationPayload: buildPrototypeSyntheticAttestationPayload(),
+      arbAttestation: buildPrototypeSyntheticArbAttestation(reportDataHex),
+    };
+  }
+
+  try {
+    const runtimeInfo = await fetchPrototypeDstackInfo();
+    const runtimeQuote = await fetchPrototypeDstackQuote(reportDataHex);
+    const runtimeTcbInfo = readRecordField(runtimeInfo, ["tcb_info", "tcbInfo"]) || {};
+    const runtimeAppCompose = extractPrototypeAppComposeFromRuntimeInfo(runtimeInfo);
+    const runtimeComposeHash =
+      extractComposeHashFromPrototypeEventLog(parsePrototypeEventLog(runtimeQuote?.event_log)) ||
+      normalizeHex(extractPrototypeComposeHashFromRuntimeInfo(runtimeInfo) || "") ||
+      (runtimeAppCompose ? sha256TextHex(runtimeAppCompose) : null);
+    const normalizedQuote = readStringField(runtimeQuote, ["quote"]) || PROTOTYPE_ATTESTATION_QUOTE;
+    let runtimeMeasurement = extractPrototypeMeasurementFromRuntimeInfo(runtimeInfo);
+    if (
+      (!runtimeMeasurement || isPlaceholderRuntimeMeasurement(runtimeMeasurement)) &&
+      PROTOTYPE_PHALA_API_KEY &&
+      normalizedQuote
+    ) {
+      try {
+        const cloudVerification = await verifyPrototypeQuoteWithPhalaCloud(normalizedQuote);
+        const cloudMeasurement = extractPrototypeMeasurementFromCloudVerification(cloudVerification);
+        if (cloudMeasurement) {
+          runtimeMeasurement = normalizeHex(cloudMeasurement);
+        }
+      } catch {
+        // Keep runtime measurement fallback behavior if cloud verification is unavailable here.
+      }
+    }
+    if (!runtimeMeasurement) {
+      runtimeMeasurement = PROTOTYPE_ATTESTATION_MEASUREMENT;
+    }
+    const normalizedReportData = normalizeHex(reportDataHex || ZERO_REPORT_DATA_HEX);
+    const infoPayload = {
+      schemaVersion: "prototype-app-info-v1",
+      service: SERVICE_NAME,
+      tcb_info: {
+        ...runtimeTcbInfo,
+        ...(runtimeAppCompose ? { app_compose: runtimeAppCompose } : {}),
+        ...(runtimeComposeHash ? { compose_hash: runtimeComposeHash } : {}),
+      },
+      signerProvider: {
+        providerId: SIGNER_PROVIDER.providerId,
+        providerType: SIGNER_PROVIDER.providerType,
+      },
+    };
+    const attestationPayload = {
+      schemaVersion: "prototype-app-attestation-v1",
+      quote: normalizedQuote,
+      report_data: normalizedReportData,
+      event_log: parsePrototypeEventLog(runtimeQuote?.event_log),
+      provider_id: PROTOTYPE_ATTESTATION_PROVIDER_ID,
+      measurement: runtimeMeasurement,
+    };
+    const arbAttestation = {
+      schemaVersion: "arb-attestation-evidence-v1",
+      providerId: PROTOTYPE_ATTESTATION_PROVIDER_ID,
+      executionMode: PROTOTYPE_ATTESTATION_EXECUTION_MODE,
+      quoteFormat: PROTOTYPE_ATTESTATION_QUOTE_FORMAT,
+      quote: normalizedQuote,
+      quoteHash: sha256Hex({ quote: normalizedQuote }),
+      measurement: runtimeMeasurement,
+      issuedAt: PROTOTYPE_ATTESTATION_ISSUED_AT,
+      nonce: PROTOTYPE_ATTESTATION_NONCE,
+      reportDataDigest: normalizedReportData,
+      ...(runtimeComposeHash ? { appComposeHash: runtimeComposeHash } : {}),
+    };
+
+    return {
+      source: "dstack_runtime",
+      infoPayload,
+      attestationPayload,
+      arbAttestation,
+    };
+  } catch (error) {
+    if (PROTOTYPE_ATTESTATION_SOURCE === "dstack_runtime") {
+      throw error;
+    }
+    return {
+      source: "prototype_env",
+      infoPayload: buildPrototypeSyntheticInfoPayload(),
+      attestationPayload: buildPrototypeSyntheticAttestationPayload(),
+      arbAttestation: buildPrototypeSyntheticArbAttestation(reportDataHex),
+      fallbackError: error instanceof Error ? error.message : String(error),
+    };
+  }
+};
+
+const buildPrototypeInfoPayload = async () => resolvePrototypeRuntimeAttestationEvidence(runtimeState.lastArbDigest || ZERO_REPORT_DATA_HEX).then((result) => result.infoPayload);
+
+const buildPrototypeAttestationPayload = async () =>
+  resolvePrototypeRuntimeAttestationEvidence(runtimeState.lastArbDigest || ZERO_REPORT_DATA_HEX).then(
+    (result) => result.attestationPayload
+  );
+
+const buildFeeRecommendation = (channel) => {
+  const currentFeePpm = channel.outboundFeePpm ?? 250;
+  const reasons = [];
+  let action = "hold";
+  let suggestedFeePpm = currentFeePpm;
+  let confidence = 0.6;
+
+  if (channel.forwardCount >= 5 && channel.localBalanceRatio >= 0.7 && channel.failedForwardCount === 0) {
+    action = "raise";
+    suggestedFeePpm = currentFeePpm + (channel.forwardCount >= 8 ? 100 : 50);
+    confidence = 0.86;
+    reasons.push("strong_recent_forward_activity", "outbound_liquidity_is_high");
+  } else if (channel.failedForwardCount > 0 || channel.localBalanceRatio <= 0.25 || channel.forwardCount === 0) {
+    action = "lower";
+    suggestedFeePpm = Math.max(0, currentFeePpm - 100);
+    confidence = channel.failedForwardCount > 0 ? 0.83 : 0.74;
+    if (channel.failedForwardCount > 0) reasons.push("failed_forward_pressure");
+    if (channel.localBalanceRatio <= 0.25) reasons.push("outbound_liquidity_is_low");
+    if (channel.forwardCount === 0) reasons.push("no_recent_forward_activity");
+  } else {
+    reasons.push("channel_state_is_balanced");
+  }
+
+  return {
+    channelRef: channel.channelRef,
+    peerRef: channel.peerRef,
+    action,
+    currentFeePpm,
+    suggestedFeePpm,
+    confidence,
+    reasons,
+  };
+};
+
+const scorePrototypeRecommendations = (telemetry) => {
+  const transformedSnapshot = toFeatureOnly(telemetry);
+  const feeRecommendations = transformedSnapshot.channels.map(buildFeeRecommendation);
+
+  return {
+    modelVersion: "prototype-fee-forward-v1",
+    transformedSnapshot,
+    recommendationSet: {
+      schemaVersion: "prototype-recommendations-v1",
+      feeRecommendations,
+      summary: {
+        raiseCount: feeRecommendations.filter((item) => item.action === "raise").length,
+        lowerCount: feeRecommendations.filter((item) => item.action === "lower").length,
+        holdCount: feeRecommendations.filter((item) => item.action === "hold").length,
+      },
+    },
+  };
+};
+
+const buildSourceReceipt = (telemetry) => ({
+  schemaVersion: "prototype-source-receipt-v1",
+  sourceType: "ui_submitted_telemetry",
+  telemetrySchemaVersion: "prototype-telemetry-v1",
+  collectorId: SERVICE_NAME,
+  nodeAlias: String(telemetry?.nodeAlias || "prototype-node"),
+  channelCount: Array.isArray(telemetry?.channels) ? telemetry.channels.length : 0,
+  collectedAt: PROTOTYPE_SOURCE_RECEIPT_COLLECTED_AT,
+  telemetryHash: sha256Hex(telemetry || {}),
+});
+
+const buildPrototypeSyntheticArbAttestation = (digest) => {
+  if (!PROTOTYPE_ATTESTATION_INCLUDE) return null;
+  const appComposeHash = sha256TextHex(buildPrototypeAppComposeString());
+  return {
+    schemaVersion: "arb-attestation-evidence-v1",
+    providerId: PROTOTYPE_ATTESTATION_PROVIDER_ID,
+    executionMode: PROTOTYPE_ATTESTATION_EXECUTION_MODE,
+    quoteFormat: PROTOTYPE_ATTESTATION_QUOTE_FORMAT,
+    quote: PROTOTYPE_ATTESTATION_QUOTE,
+    quoteHash: sha256Hex({ quote: PROTOTYPE_ATTESTATION_QUOTE }),
+    measurement: PROTOTYPE_ATTESTATION_MEASUREMENT,
+    issuedAt: PROTOTYPE_ATTESTATION_ISSUED_AT,
+    nonce: PROTOTYPE_ATTESTATION_NONCE,
+    reportDataDigest: digest,
+    appComposeHash,
+  };
+};
+
+const createSignerProviderRuntime = () => {
+  if (PROTOTYPE_SIGNER_PROVIDER_TYPE === "env_hmac") {
+    return {
+      providerId: PROTOTYPE_SIGNER_PROVIDER_ID,
+      providerType: "env_hmac",
+      algorithm: "hmac-sha256",
+      keyId: PROTOTYPE_ARB_KEY_ID,
+      keySource: "env_shared_secret",
+      getReadiness() {
+        if (
+          PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY &&
+          PROTOTYPE_ARB_SIGNING_KEY === DEFAULT_PROTOTYPE_ARB_SIGNING_KEY
+        ) {
+          return {
+            ok: false,
+            error: "Explicit non-default signing key required by policy.",
+            keyPolicy: {
+              requireExplicitKey: true,
+              keySource: this.keySource,
+              signerProviderId: this.providerId,
+              signerProviderType: this.providerType,
+            },
+          };
+        }
+
+        return {
+          ok: true,
+          keyPolicy: {
+            requireExplicitKey: PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY,
+            keySource: this.keySource,
+            signerProviderId: this.providerId,
+            signerProviderType: this.providerType,
+          },
+        };
+      },
+      signDigest(digest) {
+        return {
+          algorithm: this.algorithm,
+          keyId: this.keyId,
+          keySource: this.keySource,
+          signerProviderId: this.providerId,
+          signerProviderType: this.providerType,
+          value: hmacSha256Hex(digest, PROTOTYPE_ARB_SIGNING_KEY),
+        };
+      },
+      verifyDigest(digest, signature) {
+        const errors = [];
+        const expectedSignature = hmacSha256Hex(digest, PROTOTYPE_ARB_SIGNING_KEY);
+
+        if (signature?.algorithm !== this.algorithm) errors.push("signature.algorithm mismatch.");
+        if (signature?.keyId !== this.keyId) errors.push("signature.keyId mismatch.");
+        if (signature?.keySource !== this.keySource) errors.push("signature.keySource mismatch.");
+        if (signature?.signerProviderId !== PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID) {
+          errors.push("signature.signerProviderId mismatch.");
+        }
+        if (signature?.signerProviderType !== PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE) {
+          errors.push("signature.signerProviderType mismatch.");
+        }
+        if (signature?.value !== expectedSignature) errors.push("signature mismatch.");
+
+        return {
+          errors,
+          expectedSignature,
+        };
+      },
+    };
+  }
+
+  if (PROTOTYPE_SIGNER_PROVIDER_TYPE === "phala_kms_stub") {
+    return {
+      providerId: PROTOTYPE_SIGNER_PROVIDER_ID,
+      providerType: "phala_kms_stub",
+      algorithm: "provider-managed",
+      keyId: "prototype-phala-kms-stub",
+      keySource: "provider_managed",
+      getReadiness() {
+        return {
+          ok: false,
+          error: PROTOTYPE_SIGNER_PROVIDER_UNAVAILABLE_REASON,
+          keyPolicy: {
+            requireExplicitKey: false,
+            keySource: this.keySource,
+            signerProviderId: this.providerId,
+            signerProviderType: this.providerType,
+          },
+        };
+      },
+      signDigest() {
+        throw new Error(PROTOTYPE_SIGNER_PROVIDER_UNAVAILABLE_REASON);
+      },
+      verifyDigest() {
+        return {
+          errors: ["signature verification is unavailable for signerProviderType phala_kms_stub."],
+          expectedSignature: null,
+        };
+      },
+    };
+  }
+
+  return {
+    providerId: PROTOTYPE_SIGNER_PROVIDER_ID,
+    providerType: PROTOTYPE_SIGNER_PROVIDER_TYPE,
+    algorithm: "provider-managed",
+    keyId: "prototype-unsupported-provider",
+    keySource: "provider_managed",
+    getReadiness() {
+      return {
+        ok: false,
+        error: `Unsupported signer provider type: ${PROTOTYPE_SIGNER_PROVIDER_TYPE}.`,
+        keyPolicy: {
+          requireExplicitKey: false,
+          keySource: this.keySource,
+          signerProviderId: this.providerId,
+          signerProviderType: this.providerType,
+        },
+      };
+    },
+    signDigest() {
+      throw new Error(`Unsupported signer provider type: ${PROTOTYPE_SIGNER_PROVIDER_TYPE}.`);
+    },
+    verifyDigest() {
+      return {
+        errors: [`signature verification is unavailable for signerProviderType ${PROTOTYPE_SIGNER_PROVIDER_TYPE}.`],
+        expectedSignature: null,
+      };
+    },
+  };
+};
+
+const SIGNER_PROVIDER = createSignerProviderRuntime();
+
+const buildPrototypeArb = async (scored, sourceReceipt) => {
+  const inputHash = sha256Hex(scored.transformedSnapshot);
+  const outputHash = sha256Hex(scored.recommendationSet);
+  const arbCore = {
+    arbVersion: "prototype-arb-v1",
+    provider: "phala-minimal-prototype",
+    modelVersion: scored.modelVersion,
+    privacyMode: "feature_only",
+    bindingMode: "sha256-digest",
+    issuedAt: "2026-03-13T00:00:00Z",
+    inputHash,
+    outputHash,
+  };
+
+  const digest = sha256Hex(arbCore);
+  const signature = SIGNER_PROVIDER.signDigest(digest);
+  const attestation = PROTOTYPE_ATTESTATION_INCLUDE
+    ? (await resolvePrototypeRuntimeAttestationEvidence(digest)).arbAttestation
+    : null;
+  const sourceReceiptHash = sourceReceipt ? sha256Hex(sourceReceipt) : null;
+  runtimeState.lastArbDigest = digest;
+
+  return {
+    ...arbCore,
+    digest,
+    signature,
+    ...(sourceReceiptHash ? { sourceReceiptHash } : {}),
+    ...(attestation ? { attestation } : {}),
+    verified: false,
+    note: "This is a payload-bound prototype ARB signed with a prototype signer provider, not a production signature.",
+  };
+};
+
+const parsePrototypeEventLog = (eventLog) => {
+  if (Array.isArray(eventLog)) return eventLog.filter((entry) => entry && typeof entry === "object");
+  if (typeof eventLog === "string" && eventLog.trim()) {
+    try {
+      const parsed = JSON.parse(eventLog);
+      return Array.isArray(parsed) ? parsed.filter((entry) => entry && typeof entry === "object") : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const extractComposeHashFromPrototypeEventLog = (events) => {
+  for (const event of events) {
+    const eventName = typeof event?.event === "string" ? event.event.toLowerCase() : "";
+    if (eventName === "compose-hash" || eventName === "app-compose-hash") {
+      const digest = typeof event?.digest === "string" ? event.digest : typeof event?.value === "string" ? event.value : null;
+      if (digest) return normalizeHex(digest);
+    }
+  }
+  return null;
+};
+
+const parsePrototypeCloudQuoteVerifyResponse = (value) => {
+  const root = value && typeof value === "object" ? value : {};
+  const quote = root && typeof root.quote === "object" && root.quote ? root.quote : {};
+  const success = root.success === true || root.ok === true;
+  const quoteVerified = quote.verified === true || root.verified === true;
+  return {
+    success,
+    quoteVerified,
+    raw: root,
+  };
+};
+
+const verifyPrototypeQuoteWithPhalaCloud = async (quoteHex) => {
+  if (!PROTOTYPE_PHALA_API_KEY) {
+    throw new Error("Missing PHALA_CLOUD_API_KEY for cloud app verification.");
+  }
+
+  const response = await fetch(`${PROTOTYPE_PHALA_API_BASE_URL}/attestations/verify`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-API-Key": PROTOTYPE_PHALA_API_KEY,
+      "X-Phala-Version": PROTOTYPE_PHALA_API_VERSION,
+    },
+    body: JSON.stringify({ hex: quoteHex }),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Phala cloud verify request failed (${response.status}): ${text}`);
+  }
+
+  const parsed = text.trim().length > 0 ? JSON.parse(text) : {};
+  return parsePrototypeCloudQuoteVerifyResponse(parsed);
+};
+
+const evaluatePrototypeAttestationPolicy = (arb) => {
+  const warnings = [];
+  const errors = [];
+  const attestation = arb?.attestation;
+  const applied = PROTOTYPE_VERIFY_REQUIRE_ATTESTATION || Boolean(attestation);
+
+  if (!applied) {
+    return {
+      applied: false,
+      errors,
+      warnings,
+      policy: {
+        requireAttestation: false,
+        minExecutionMode: PROTOTYPE_VERIFY_MIN_EXECUTION_MODE,
+        allowedProviderId: PROTOTYPE_VERIFY_ALLOWED_ATTESTATION_PROVIDER_ID,
+        allowedMeasurement: PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT,
+        allowedQuoteFormat: PROTOTYPE_VERIFY_ALLOWED_QUOTE_FORMAT,
+        requireReportDataBinding: PROTOTYPE_VERIFY_REQUIRE_REPORT_DATA_BINDING,
+      },
+    };
+  }
+
+  warnings.push(
+    "Prototype attestation policy checks env-configured evidence only; this is not live quote verification."
+  );
+  if (canUseDstackRuntimeAttestation() && isPlaceholderRuntimeMeasurement(PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT)) {
+    warnings.push(
+      "Pinned runtime measurement is not configured; verification is still using the runtime discovery placeholder."
+    );
+  }
+
+  if (!attestation || typeof attestation !== "object") {
+    errors.push("Attestation evidence is required by policy but missing.");
+    return {
+      applied: true,
+      errors,
+      warnings,
+      policy: {
+        requireAttestation: true,
+        minExecutionMode: PROTOTYPE_VERIFY_MIN_EXECUTION_MODE,
+        allowedProviderId: PROTOTYPE_VERIFY_ALLOWED_ATTESTATION_PROVIDER_ID,
+        allowedMeasurement: PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT,
+        allowedQuoteFormat: PROTOTYPE_VERIFY_ALLOWED_QUOTE_FORMAT,
+        requireReportDataBinding: PROTOTYPE_VERIFY_REQUIRE_REPORT_DATA_BINDING,
+      },
+    };
+  }
+
+  if (modeRank(attestation.executionMode) < modeRank(PROTOTYPE_VERIFY_MIN_EXECUTION_MODE)) {
+    errors.push("attestation.executionMode does not satisfy minimum policy.");
+  }
+  if (attestation.providerId !== PROTOTYPE_VERIFY_ALLOWED_ATTESTATION_PROVIDER_ID) {
+    errors.push("attestation.providerId mismatch.");
+  }
+  if (attestation.measurement !== PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT) {
+    errors.push("attestation.measurement mismatch.");
+  }
+  if (attestation.quoteFormat !== PROTOTYPE_VERIFY_ALLOWED_QUOTE_FORMAT) {
+    errors.push("attestation.quoteFormat mismatch.");
+  }
+  if (typeof attestation.quote === "string" && attestation.quoteHash !== sha256Hex({ quote: attestation.quote })) {
+    errors.push("attestation.quoteHash mismatch.");
+  } else if (typeof attestation.quote !== "string" && typeof attestation.quoteHash === "string") {
+    warnings.push("Attestation quote body omitted from payload; verifier relied on quoteHash only.");
+  }
+  if (PROTOTYPE_VERIFY_REQUIRE_REPORT_DATA_BINDING && attestation.reportDataDigest !== arb.digest) {
+    errors.push("attestation.reportDataDigest mismatch.");
+  }
+
+  return {
+    applied: true,
+    errors,
+    warnings,
+    policy: {
+      requireAttestation: PROTOTYPE_VERIFY_REQUIRE_ATTESTATION,
+      minExecutionMode: PROTOTYPE_VERIFY_MIN_EXECUTION_MODE,
+      allowedProviderId: PROTOTYPE_VERIFY_ALLOWED_ATTESTATION_PROVIDER_ID,
+      allowedMeasurement: PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT,
+      allowedQuoteFormat: PROTOTYPE_VERIFY_ALLOWED_QUOTE_FORMAT,
+      requireReportDataBinding: PROTOTYPE_VERIFY_REQUIRE_REPORT_DATA_BINDING,
+    },
+  };
+};
+
+const evaluatePrototypeSourceReceiptPolicy = (arb, sourceReceipt) => {
+  const warnings = [];
+  const errors = [];
+  const applied = PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT || Boolean(sourceReceipt);
+
+  if (!applied) {
+    return {
+      applied: false,
+      errors,
+      warnings: arb?.sourceReceiptHash
+        ? [
+            "Prototype source receipt hash is present in the ARB, but no sourceReceipt was supplied for binding verification."
+          ]
+        : warnings,
+      policy: {
+        requireSourceReceipt: false,
+      },
+      expectedSourceReceiptHash: null,
+    };
+  }
+
+  warnings.push(
+    "Prototype source receipt only binds caller-supplied telemetry metadata; it is not authenticated source evidence."
+  );
+
+  if (!sourceReceipt || typeof sourceReceipt !== "object") {
+    errors.push("Source receipt is required by policy but missing.");
+    return {
+      applied: true,
+      errors,
+      warnings,
+      policy: {
+        requireSourceReceipt: PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT,
+      },
+      expectedSourceReceiptHash: null,
+    };
+  }
+
+  const expectedSourceReceiptHash = sha256Hex(sourceReceipt);
+  if (arb?.sourceReceiptHash !== expectedSourceReceiptHash) {
+    errors.push("sourceReceiptHash mismatch.");
+  }
+
+  return {
+    applied: true,
+    errors,
+    warnings,
+    policy: {
+      requireSourceReceipt: PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT,
+    },
+    expectedSourceReceiptHash,
+  };
+};
+
+const evaluatePrototypeLiveAppEvidencePolicy = async (arb, liveAppInfo, liveAppAttestation) => {
+  const warnings = [];
+  const errors = [];
+  const applied =
+    PROTOTYPE_VERIFY_REQUIRE_LIVE_APP_EVIDENCE || Boolean(liveAppInfo) || Boolean(liveAppAttestation);
+
+  if (!applied) {
+    return {
+      applied: false,
+      errors,
+      warnings,
+      policy: {
+        requireLiveAppEvidence: false,
+        requireCloudAppVerification: false,
+      },
+      expectedLiveEvidence: null,
+      cloudVerification: null,
+    };
+  }
+
+  if (PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION) {
+    warnings.push(
+      "Prototype live app evidence verifies quote validity via Phala's cloud API but still trusts caller-supplied /info and /attestation payload transport."
+    );
+  } else {
+    warnings.push(
+      "Prototype live app evidence compares caller-supplied /info and /attestation payloads only; it does not verify them against Phala's cloud API."
+    );
+  }
+
+  if (!liveAppInfo || typeof liveAppInfo !== "object") {
+    errors.push("liveAppInfo is required by policy but missing.");
+  }
+  if (!liveAppAttestation || typeof liveAppAttestation !== "object") {
+    errors.push("liveAppAttestation is required by policy but missing.");
+  }
+  if (errors.length > 0) {
+    return {
+      applied: true,
+      errors,
+      warnings,
+      policy: {
+        requireLiveAppEvidence: PROTOTYPE_VERIFY_REQUIRE_LIVE_APP_EVIDENCE,
+        requireCloudAppVerification: PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION,
+      },
+      expectedLiveEvidence: null,
+      cloudVerification: null,
+    };
+  }
+
+  const appCompose = liveAppInfo?.tcb_info?.app_compose;
+  const directComposeHash = liveAppInfo?.tcb_info?.compose_hash || liveAppInfo?.tcb_info?.composeHash;
+  const normalizedDirectComposeHash =
+    typeof directComposeHash === "string" && directComposeHash.trim().length > 0
+      ? normalizeHex(directComposeHash)
+      : null;
+  const composeHashFromInfo =
+    normalizedDirectComposeHash ||
+    (typeof appCompose === "string" ? sha256TextHex(appCompose) : null);
+  const composeHashFromEventLog = extractComposeHashFromPrototypeEventLog(
+    parsePrototypeEventLog(liveAppAttestation?.event_log)
+  );
+  const liveReportData = liveAppAttestation?.report_data ? normalizeHex(liveAppAttestation.report_data) : null;
+  const liveQuote = typeof liveAppAttestation?.quote === "string" ? liveAppAttestation.quote : null;
+  const allowRuntimeQuoteVariation = PROTOTYPE_ATTESTATION_SOURCE === "dstack_runtime";
+
+  if (!composeHashFromInfo) {
+    errors.push("liveAppInfo.tcb_info.app_compose is missing.");
+  }
+  if (composeHashFromInfo && composeHashFromEventLog !== normalizeHex(composeHashFromInfo)) {
+    if (allowRuntimeQuoteVariation) {
+      warnings.push(
+        "Live runtime attestation event_log compose hash differed from /info compose_hash; verification relied on /info compose_hash plus cloud quote verification."
+      );
+    } else {
+      errors.push("liveAppAttestation.composeHash mismatch.");
+    }
+  }
+  if (typeof arb?.attestation?.quote === "string") {
+    if (liveQuote !== arb.attestation.quote) {
+      if (allowRuntimeQuoteVariation) {
+        warnings.push(
+          "Live runtime attestation quote differed from the ARB quote; verification relied on report_data, compose hash, and cloud quote validity instead of raw quote equality."
+        );
+      } else {
+        errors.push("liveAppAttestation.quote mismatch.");
+      }
+    }
+  } else if (typeof arb?.attestation?.quoteHash === "string") {
+    if (arb.attestation.quoteHash !== sha256Hex({ quote: liveQuote || "" })) {
+      if (allowRuntimeQuoteVariation) {
+        warnings.push(
+          "Live runtime attestation quote hash differed from the ARB quote hash; verification relied on report_data, compose hash, and cloud quote validity instead of raw quote equality."
+        );
+      } else {
+        errors.push("liveAppAttestation.quoteHash mismatch.");
+      }
+    }
+  }
+  if (liveReportData !== normalizeHex(arb?.digest)) {
+    errors.push("liveAppAttestation.report_data mismatch.");
+  }
+  if (composeHashFromInfo && arb?.attestation?.appComposeHash && normalizeHex(arb.attestation.appComposeHash) !== normalizeHex(composeHashFromInfo)) {
+    errors.push("liveAppInfo.composeHash mismatch.");
+  }
+
+  let cloudVerification = null;
+  if (PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION) {
+    try {
+      cloudVerification = await verifyPrototypeQuoteWithPhalaCloud(liveQuote);
+      if (!cloudVerification.quoteVerified) {
+        errors.push("liveAppAttestation.quote verification via Phala cloud API failed.");
+      }
+    } catch (error) {
+      errors.push(`liveAppAttestation.cloudVerification error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return {
+    applied: true,
+    errors,
+    warnings,
+    policy: {
+      requireLiveAppEvidence: PROTOTYPE_VERIFY_REQUIRE_LIVE_APP_EVIDENCE,
+      requireCloudAppVerification: PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION,
+    },
+    expectedLiveEvidence: {
+      composeHash: composeHashFromInfo,
+      reportData: arb?.digest || null,
+      quote: arb?.attestation?.quote || null,
+    },
+    cloudVerification,
+  };
+};
+
+const verifyPrototypeArb = async ({
+  transformedSnapshot,
+  recommendationSet,
+  arb,
+  sourceReceipt,
+  liveAppInfo,
+  liveAppAttestation,
+}) => {
+  const errors = [];
+  const warnings = [];
+
+  if (!transformedSnapshot || typeof transformedSnapshot !== "object") {
+    errors.push("Missing transformedSnapshot.");
+  }
+
+  if (!recommendationSet || typeof recommendationSet !== "object") {
+    errors.push("Missing recommendationSet.");
+  }
+
+  if (!arb || typeof arb !== "object") {
+    errors.push("Missing arb.");
+  }
+
+  if (errors.length > 0) {
+    return {
+      ok: false,
+      errors,
+      warnings,
+      expected: null,
+      signerPolicy: null,
+      attestationPolicy: null,
+      sourceReceiptPolicy: null,
+      liveAppEvidencePolicy: null,
+      cloudVerification: null,
+    };
+  }
+
+  const expectedInputHash = sha256Hex(transformedSnapshot);
+  const expectedOutputHash = sha256Hex(recommendationSet);
+  const expectedDigest = sha256Hex({
+    arbVersion: "prototype-arb-v1",
+    provider: "phala-minimal-prototype",
+    modelVersion: arb.modelVersion,
+    privacyMode: arb.privacyMode,
+    bindingMode: arb.bindingMode,
+    issuedAt: arb.issuedAt,
+    inputHash: expectedInputHash,
+    outputHash: expectedOutputHash,
+  });
+
+  if (arb.arbVersion !== "prototype-arb-v1") {
+    errors.push("arbVersion mismatch.");
+  }
+  if (arb.bindingMode !== "sha256-digest") {
+    errors.push("bindingMode mismatch.");
+  }
+  if (arb.inputHash !== expectedInputHash) {
+    errors.push("inputHash mismatch.");
+  }
+  if (arb.outputHash !== expectedOutputHash) {
+    errors.push("outputHash mismatch.");
+  }
+  if (arb.digest !== expectedDigest) {
+    errors.push("digest mismatch.");
+  }
+
+  const signatureVerification = SIGNER_PROVIDER.verifyDigest(expectedDigest, arb.signature);
+  errors.push(...signatureVerification.errors);
+
+  const attestationPolicy = evaluatePrototypeAttestationPolicy(arb);
+  errors.push(...attestationPolicy.errors);
+  warnings.push(...attestationPolicy.warnings);
+
+  const sourceReceiptPolicy = evaluatePrototypeSourceReceiptPolicy(arb, sourceReceipt);
+  errors.push(...sourceReceiptPolicy.errors);
+  warnings.push(...sourceReceiptPolicy.warnings);
+
+  const liveAppEvidencePolicy = await evaluatePrototypeLiveAppEvidencePolicy(arb, liveAppInfo, liveAppAttestation);
+  errors.push(...liveAppEvidencePolicy.errors);
+  warnings.push(...liveAppEvidencePolicy.warnings);
+
+  warnings.push(
+    "Prototype verifier checks provider metadata, HMAC signatures, digest binding, and optional policy hooks only; this is not a production verifier."
+  );
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    expected: {
+      inputHash: expectedInputHash,
+      outputHash: expectedOutputHash,
+      digest: expectedDigest,
+      signature: signatureVerification.expectedSignature,
+      sourceReceiptHash: sourceReceiptPolicy.expectedSourceReceiptHash,
+      liveAppEvidence: liveAppEvidencePolicy.expectedLiveEvidence,
+    },
+    signerPolicy: {
+      allowedSignerProviderId: PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID,
+      expectedSignerProviderType: PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE,
+      providerRuntimeType: SIGNER_PROVIDER.providerType,
+      providerRuntimeId: SIGNER_PROVIDER.providerId,
+    },
+    attestationPolicy: attestationPolicy.policy,
+    sourceReceiptPolicy: sourceReceiptPolicy.policy,
+    liveAppEvidencePolicy: liveAppEvidencePolicy.policy,
+    cloudVerification: liveAppEvidencePolicy.cloudVerification,
+  };
+};
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url || "/", "http://127.0.0.1");
+
+  if (req.method === "GET" && url.pathname === "/health") {
+    sendJson(res, 200, {
+      ok: true,
+      service: SERVICE_NAME,
+      mode: "minimal_props_service",
+      phalaReady: true,
+      attestationSource: PROTOTYPE_ATTESTATION_SOURCE,
+      measurementPolicy: buildRuntimeMeasurementPolicyStatus(),
+      signerProvider: {
+        providerId: SIGNER_PROVIDER.providerId,
+        providerType: SIGNER_PROVIDER.providerType,
+      },
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/info") {
+    try {
+      const payload = await buildPrototypeInfoPayload();
+      sendJson(res, 200, wantsFullPayload(url) ? payload : compactInfoPayload(payload));
+    } catch (error) {
+      sendJson(res, 503, {
+        ok: false,
+        mode: "runtime_attestation_source",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/attestation") {
+    try {
+      const payload = await buildPrototypeAttestationPayload();
+      sendJson(res, 200, wantsFullPayload(url) ? payload : compactAppAttestationPayload(payload));
+    } catch (error) {
+      sendJson(res, 503, {
+        ok: false,
+        mode: "runtime_attestation_source",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/snapshot") {
+    const body = await parseBody(req);
+    const privacyMode = body?.privacyMode === "banded" ? "banded" : "feature_only";
+    const telemetry = body?.telemetry;
+
+    if (!telemetry || !Array.isArray(telemetry.channels)) {
+      sendJson(res, 400, {
+        ok: false,
+        mode: "privacy_transform_prototype",
+        error: "Expected telemetry.channels array in request body.",
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      mode: "privacy_transform_prototype",
+      acceptedTelemetry: true,
+      privacyMode,
+      transformedSnapshot: applyPrototypePrivacyTransform(telemetry, privacyMode),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/recommend") {
+    const body = await parseBody(req);
+    const telemetry = body?.telemetry;
+
+    if (!telemetry || !Array.isArray(telemetry.channels)) {
+      sendJson(res, 400, {
+        ok: false,
+        mode: "deterministic_scoring_prototype",
+        error: "Expected telemetry.channels array in request body.",
+      });
+      return;
+    }
+
+    const providerReadiness = SIGNER_PROVIDER.getReadiness();
+    if (!providerReadiness.ok) {
+      sendJson(res, 503, {
+        ok: false,
+        mode: "prototype_signer_provider",
+        error: providerReadiness.error,
+        signerPolicy: providerReadiness.keyPolicy,
+      });
+      return;
+    }
+
+    const scored = scorePrototypeRecommendations(telemetry);
+    const sourceReceipt = buildSourceReceipt(telemetry);
+    try {
+      const arb = await buildPrototypeArb(scored, sourceReceipt);
+      const payload = {
+        ok: true,
+        mode: "deterministic_scoring_prototype",
+        privacyMode: "feature_only",
+        modelVersion: scored.modelVersion,
+        signingMode: "prototype_hmac",
+        transformedSnapshot: scored.transformedSnapshot,
+        recommendationSet: scored.recommendationSet,
+        sourceReceipt,
+        arb,
+      };
+      sendJson(
+        res,
+        200,
+        wantsFullPayload(url)
+          ? payload
+          : {
+              ...payload,
+              arb: compactArbPayload(payload.arb),
+            }
+      );
+    } catch (error) {
+      sendJson(res, 503, {
+        ok: false,
+        mode: "runtime_attestation_source",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/verify") {
+    const body = await parseBody(req);
+    const verification = await verifyPrototypeArb({
+      transformedSnapshot: body?.transformedSnapshot,
+      recommendationSet: body?.recommendationSet,
+      arb: body?.arb,
+      sourceReceipt: body?.sourceReceipt,
+      liveAppInfo: body?.liveAppInfo,
+      liveAppAttestation: body?.liveAppAttestation,
+    });
+    const payload = {
+      ok: verification.ok,
+      mode: "prototype_digest_verify",
+      errors: verification.errors,
+      warnings: verification.warnings,
+      expected: verification.expected,
+      signerPolicy: verification.signerPolicy,
+      attestationPolicy: verification.attestationPolicy,
+      sourceReceiptPolicy: verification.sourceReceiptPolicy,
+      liveAppEvidencePolicy: verification.liveAppEvidencePolicy,
+      cloudVerification: verification.cloudVerification,
+    };
+    sendJson(res, 200, wantsFullPayload(url) ? payload : compactVerifyResponse(payload));
+    return;
+  }
+
+  sendJson(res, 404, {
+    ok: false,
+    error: `Unknown route: ${req.method} ${url.pathname}`,
+  });
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Minimal prototype API listening on http://0.0.0.0:${PORT}`);
+});

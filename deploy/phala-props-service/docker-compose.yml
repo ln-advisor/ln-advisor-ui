@@ -1,0 +1,16 @@
+services:
+  props-api:
+    build:
+      context: ../..
+      dockerfile: deploy/phala-props-service/Dockerfile
+    ports:
+      - "8787:8787"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      API_PORT: "8787"
+      LIGHTNING_SNAPSHOT_MODE: "${LIGHTNING_SNAPSHOT_MODE:-mock}"
+      API_RETENTION_MODE: "${API_RETENTION_MODE:-none}"
+      API_REQUIRE_RELEASED_SIGNER: "${API_REQUIRE_RELEASED_SIGNER:-false}"
+      ARB_DEV_SIGNING_KEY: "${ARB_DEV_SIGNING_KEY:-change-me-local-dev-key}"
+      PHALA_ATTESTATION_SOURCE: "${PHALA_ATTESTATION_SOURCE:-cloud_cvm_attestation}"

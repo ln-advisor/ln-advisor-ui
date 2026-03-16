@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import type { SourceProvenanceReceipt } from "./provenance";
 import type { RecommendationSetV1 } from "../scoring/scoreNodeState";
 import type { ArbAttestationEvidence } from "./attestation";
+import type { ModelPinningMode, PinnedModelManifest } from "../scoring/modelManifest";
 
 export interface ArbSignature {
   algorithm: "hmac-sha256";
@@ -16,6 +17,8 @@ export interface ArbBundle {
   expiresAt: string;
   recommendationType: "fee_forward";
   sourceProvenanceHash: string;
+  modelManifestHash: string;
+  modelPinningMode: ModelPinningMode;
   privacyPolicyId: string;
   modelVersion: string;
   inputHash: string;
@@ -30,6 +33,7 @@ export interface BuildArbOptions {
   sourceProvenance: SourceProvenanceReceipt;
   privacyPolicyId: string;
   devSigningKey: string;
+  modelManifest?: PinnedModelManifest;
   attestation?: ArbAttestationEvidence;
   issuedAt?: string;
   ttlSeconds?: number;
@@ -94,6 +98,20 @@ export function buildArb(options: BuildArbOptions): ArbBundle {
   const expiresAt = resolveExpiresAt(issuedAt, ttlSeconds);
 
   const sourceProvenanceHash = sha256Hex(options.sourceProvenance);
+  const modelManifestHash = String(
+    options.modelManifest
+      ? sha256Hex(options.modelManifest)
+      : options.sourceProvenance.executionContext.modelManifestHash || ""
+  ).trim();
+  if (!modelManifestHash) {
+    throw new Error("Pinned model manifest hash is required for ARB model binding.");
+  }
+  const modelPinningMode = (options.modelManifest?.modelPinningMode ||
+    options.sourceProvenance.executionContext.modelPinningMode ||
+    "") as ModelPinningMode;
+  if (modelPinningMode !== "exact_manifest_pinned" && modelPinningMode !== "service_pinned_private_model") {
+    throw new Error("Pinned model mode is required for ARB model binding.");
+  }
   const inputHash = String(
     options.sourceProvenance.privacyTransformedSnapshotHash ||
       options.sourceProvenance.normalizedSnapshotHash ||
@@ -110,6 +128,8 @@ export function buildArb(options: BuildArbOptions): ArbBundle {
     expiresAt,
     recommendationType: "fee_forward" as const,
     sourceProvenanceHash,
+    modelManifestHash,
+    modelPinningMode,
     privacyPolicyId: options.privacyPolicyId,
     modelVersion: options.recommendation.modelVersion,
     inputHash,

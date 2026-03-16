@@ -4,6 +4,7 @@ import { normalizeSnapshot } from "../../normalization/normalizeSnapshot";
 import type { NormalizedNodeState } from "../../normalization/types";
 import { applyPrivacyPolicy, type PrivacyMode, type PrivacyTransformedNodeState } from "../../privacy/applyPrivacyPolicy";
 import { scoreNodeState, type RecommendationSetV1 } from "../../scoring/scoreNodeState";
+import type { PinnedModelManifest } from "../../scoring/modelManifest";
 import { buildArb, type ArbBundle } from "../buildArb";
 import type { ArbAttestationEvidence } from "../attestation";
 import type { SourceProvenanceReceipt } from "../provenance";
@@ -77,6 +78,7 @@ export interface SignArbBoundaryInput {
   sourceProvenance: SourceProvenanceReceipt;
   privacyPolicyId: string;
   devSigningKey: string;
+  modelManifest?: PinnedModelManifest;
   attestation?: ArbAttestationEvidence;
   issuedAt?: string;
   ttlSeconds?: number;
@@ -138,6 +140,7 @@ export class LocalEnclaveBoundaryAdapter implements EnclaveBoundaryAdapter {
       sourceProvenance: input.sourceProvenance,
       privacyPolicyId: input.privacyPolicyId,
       devSigningKey: input.devSigningKey,
+      modelManifest: input.modelManifest,
       attestation: input.attestation,
       issuedAt: input.issuedAt,
       ttlSeconds: input.ttlSeconds,

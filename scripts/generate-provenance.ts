@@ -3,6 +3,7 @@ import path from "node:path";
 import type { LightningSnapshot } from "../src/connectors/types";
 import type { NormalizedNodeState } from "../src/normalization/types";
 import { generateSourceProvenanceReceipt } from "../src/arb/provenance";
+import { DEFAULT_PINNED_MODEL_MANIFEST } from "../src/scoring/modelManifest";
 
 const sortObjectKeysDeep = (value: unknown): unknown => {
   if (Array.isArray(value)) {
@@ -46,6 +47,7 @@ async function main(): Promise<void> {
     privacySnapshot = null;
   }
   const receipt = generateSourceProvenanceReceipt(rawSnapshot, normalizedSnapshot, {
+    modelManifest: DEFAULT_PINNED_MODEL_MANIFEST,
     privacyTransformedSnapshot: privacySnapshot || undefined,
   });
 

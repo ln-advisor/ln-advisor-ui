@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildArb } from "../src/arb/buildArb";
 import type { SourceProvenanceReceipt } from "../src/arb/provenance";
 import type { RecommendationSetV1 } from "../src/scoring/scoreNodeState";
+import { DEFAULT_PINNED_MODEL_MANIFEST } from "../src/scoring/modelManifest";
 
 const DEFAULT_DEV_SIGNING_KEY = "arb-dev-signing-key-insecure";
 
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
     sourceProvenance: provenance,
     privacyPolicyId,
     devSigningKey,
+    modelManifest: DEFAULT_PINNED_MODEL_MANIFEST,
     issuedAt: issuedAtOverride,
     ttlSeconds: Number.isFinite(ttlSecondsParsed) ? ttlSecondsParsed : undefined,
   });

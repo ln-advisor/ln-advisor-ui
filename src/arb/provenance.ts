@@ -2,12 +2,18 @@ import { createHash } from "node:crypto";
 import type { GraphSnapshotReference, LightningSnapshot, SnapshotSourceType } from "../connectors/types";
 import type { NormalizedNodeState } from "../normalization/types";
 import type { ArbAttestationEvidence } from "./attestation";
+import type { VerifyPhalaAttestationBySourceResult } from "../tee/phala/attestationSource";
+import type { PinnedModelManifest } from "../scoring/modelManifest";
 
 export interface SourceExecutionContext {
   schemaVersion: "source-execution-context-v1";
   executionMode: "host_local" | "tee_candidate" | "tee_verified";
   enclaveProviderId: string | null;
   attestationHash: string | null;
+  modelManifestHash: string | null;
+  modelPinningMode: string | null;
+  sourceVerificationSource: string | null;
+  sourceVerificationHash: string | null;
 }
 
 export interface SourceProvenanceReceipt {
@@ -65,7 +71,9 @@ export function generateSourceProvenanceReceipt(
     executionMode?: SourceExecutionContext["executionMode"];
     enclaveProviderId?: string | null;
     attestation?: ArbAttestationEvidence | null;
+    modelManifest?: PinnedModelManifest | null;
     privacyTransformedSnapshot?: unknown;
+    sourceVerificationResult?: VerifyPhalaAttestationBySourceResult | null;
   }
 ): SourceProvenanceReceipt {
   const snapshotTimestamp = String(rawSnapshot.collectedAt || normalizedSnapshot.collectedAt || "").trim();
@@ -96,6 +104,12 @@ export function generateSourceProvenanceReceipt(
       executionMode: options?.executionMode ?? "host_local",
       enclaveProviderId: options?.enclaveProviderId ?? null,
       attestationHash: options?.attestation ? hashCanonicalJson(options.attestation) : null,
+      modelManifestHash: options?.modelManifest ? hashCanonicalJson(options.modelManifest) : null,
+      modelPinningMode: options?.modelManifest?.modelPinningMode || null,
+      sourceVerificationSource: options?.sourceVerificationResult?.source || null,
+      sourceVerificationHash: options?.sourceVerificationResult
+        ? hashCanonicalJson(options.sourceVerificationResult)
+        : null,
     },
   };
 }

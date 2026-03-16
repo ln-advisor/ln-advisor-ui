@@ -3,9 +3,20 @@ import { generateSourceProvenanceReceipt, type SourceProvenanceReceipt } from ".
 import type { PrivacyMode, PrivacyTransformedNodeState } from "../../privacy/applyPrivacyPolicy";
 import type { NormalizedNodeState } from "../../normalization/types";
 import type { RecommendationSetV1 } from "../../scoring/scoreNodeState";
+import {
+  DEFAULT_PINNED_MODEL_MANIFEST,
+  getPinnedModelManifestHash,
+  type PinnedModelManifest,
+} from "../../scoring/modelManifest";
 import type { ArbBundle } from "../buildArb";
 import { createHash } from "node:crypto";
 import { evaluateKeyReleasePolicy, type KeyReleasePolicy } from "../keyReleasePolicy";
+import {
+  evaluateAttestationVerificationGate,
+  type AttestationVerificationGatePolicy,
+} from "../attestationVerificationGate";
+import type { VerifyPhalaAttestationBySourceResult } from "../../tee/phala/attestationSource";
+import type { SigningKeyProvider } from "./signingKeyProvider";
 import {
   localEnclaveBoundaryAdapter,
   type EnclaveBoundaryAdapter,
@@ -19,10 +30,15 @@ import { localDevEnclaveProvider, type EnclaveProvider } from "./provider";
 export interface EnclavePipelineOptions {
   rawSnapshot: LightningSnapshot;
   privacyMode: PrivacyMode;
-  devSigningKey: string;
+  devSigningKey?: string;
+  requireReleasedSigningKey?: boolean;
   keyReleasePolicy?: KeyReleasePolicy;
+  sourceVerificationResult?: VerifyPhalaAttestationBySourceResult;
+  attestationVerificationGatePolicy?: AttestationVerificationGatePolicy;
   sourceProvenance?: SourceProvenanceReceipt;
   enclaveProvider?: EnclaveProvider;
+  signingKeyProvider?: SigningKeyProvider;
+  modelManifest?: PinnedModelManifest;
   issuedAt?: string;
   ttlSeconds?: number;
   adapter?: EnclaveBoundaryAdapter;
@@ -41,12 +57,26 @@ export interface EnclavePipelineRunSummary {
     policyApplied: boolean;
     granted: boolean;
     keyId: string | null;
+    keySource: string;
+    releasedSignerRequired: boolean;
+    releasedSignerUsed: boolean;
+    errors: string[];
+  };
+  sourceVerificationGate: {
+    policyApplied: boolean;
+    verified: boolean;
+    source: string | null;
     errors: string[];
   };
   normalize: Pick<NormalizeInBoundaryOutput, "moduleId" | "normalizedSnapshotHash">;
   privacy: Pick<PrivacyTransformBoundaryOutput, "moduleId" | "privacyMode" | "privacyOutputHash">;
   score: Pick<ScoreBoundaryOutput, "moduleId" | "recommendationHash" | "modelVersion">;
   sign: Pick<SignArbBoundaryOutput, "moduleId" | "arbHash" | "signatureDigest">;
+  model: {
+    modelVersion: string;
+    modelManifestHash: string;
+    modelPinningMode: string;
+  };
 }
 
 export interface EnclavePipelineResult {
@@ -64,6 +94,7 @@ export async function runEnclaveBoundaryPipeline(
 ): Promise<EnclavePipelineResult> {
   const adapter = options.adapter ?? localEnclaveBoundaryAdapter;
   const provider = options.enclaveProvider ?? localDevEnclaveProvider;
+  const modelManifest = options.modelManifest ?? DEFAULT_PINNED_MODEL_MANIFEST;
 
   const normalize = await adapter.normalizeSnapshot({
     rawSnapshot: options.rawSnapshot,
@@ -110,6 +141,22 @@ export async function runEnclaveBoundaryPipeline(
     moduleOrder: ["normalize_snapshot", "privacy_transform", "score_node_state", "arb_signer"],
   });
 
+  const sourceVerificationGateDecision = options.attestationVerificationGatePolicy
+    ? evaluateAttestationVerificationGate({
+        policy: options.attestationVerificationGatePolicy,
+        sourceVerification: options.sourceVerificationResult,
+        arbAttestation: attestation,
+      })
+    : {
+        ok: true,
+        errors: [] as string[],
+        warnings: [] as string[],
+      };
+
+  if (!sourceVerificationGateDecision.ok) {
+    throw new Error(`Source verification gate denied: ${sourceVerificationGateDecision.errors.join(" | ")}`);
+  }
+
   const keyReleaseDecision = options.keyReleasePolicy
     ? evaluateKeyReleasePolicy({
         policy: options.keyReleasePolicy,
@@ -126,6 +173,41 @@ export async function runEnclaveBoundaryPipeline(
     throw new Error(`Key release denied: ${keyReleaseDecision.errors.join(" | ")}`);
   }
 
+  let signingKey = String(options.devSigningKey || "").trim();
+  let signingKeySource = "direct_option";
+  const releasedSignerRequired = options.requireReleasedSigningKey === true;
+  let releasedSignerUsed = false;
+
+  if (keyReleaseDecision.keyId && options.signingKeyProvider) {
+    const released = await options.signingKeyProvider.releaseKey({
+      requestedKeyId: keyReleaseDecision.keyId,
+      policy: options.keyReleasePolicy as KeyReleasePolicy,
+      attestation,
+    });
+    if (released.keyId !== keyReleaseDecision.keyId) {
+      throw new Error(
+        `Signing key release mismatch: requested ${keyReleaseDecision.keyId} but provider returned ${released.keyId}.`
+      );
+    }
+    signingKey = String(released.keyMaterial || "").trim();
+    signingKeySource = released.source || options.signingKeyProvider.providerId;
+    releasedSignerUsed = true;
+  } else if (releasedSignerRequired && keyReleaseDecision.keyId && !options.signingKeyProvider) {
+    throw new Error("Released signer required: keyReleasePolicy granted keyId but signingKeyProvider is missing.");
+  } else if (releasedSignerRequired && !keyReleaseDecision.keyId) {
+    throw new Error("Released signer required: keyReleasePolicy did not provide a releasable keyId.");
+  }
+
+  if (releasedSignerRequired && !releasedSignerUsed) {
+    throw new Error("Released signer required: pipeline did not use signingKeyProvider.");
+  }
+
+  if (!signingKey) {
+    throw new Error(
+      "Signing key unavailable: provide devSigningKey or configure signingKeyProvider with a releasable keyId."
+    );
+  }
+
   const sourceProvenance =
     options.sourceProvenance ??
     generateSourceProvenanceReceipt(options.rawSnapshot, normalize.normalizedSnapshot, {
@@ -137,14 +219,17 @@ export async function runEnclaveBoundaryPipeline(
             : "host_local",
       enclaveProviderId: attestation.providerId,
       attestation,
+      modelManifest,
       privacyTransformedSnapshot: modelPrivacyInput.privacyTransformedNodeState,
+      sourceVerificationResult: options.sourceVerificationResult,
     });
 
   const sign = await adapter.signArb({
     recommendation: score.recommendation,
     sourceProvenance,
     privacyPolicyId: options.privacyMode,
-    devSigningKey: options.devSigningKey,
+    devSigningKey: signingKey,
+    modelManifest,
     attestation,
     issuedAt: options.issuedAt,
     ttlSeconds: options.ttlSeconds,
@@ -170,7 +255,16 @@ export async function runEnclaveBoundaryPipeline(
         policyApplied: Boolean(options.keyReleasePolicy),
         granted: keyReleaseDecision.ok,
         keyId: keyReleaseDecision.keyId,
+        keySource: signingKeySource,
+        releasedSignerRequired,
+        releasedSignerUsed,
         errors: keyReleaseDecision.errors,
+      },
+      sourceVerificationGate: {
+        policyApplied: Boolean(options.attestationVerificationGatePolicy),
+        verified: sourceVerificationGateDecision.ok,
+        source: options.sourceVerificationResult?.source || null,
+        errors: sourceVerificationGateDecision.errors,
       },
       normalize: {
         moduleId: normalize.moduleId,
@@ -190,6 +284,11 @@ export async function runEnclaveBoundaryPipeline(
         moduleId: sign.moduleId,
         arbHash: sign.arbHash,
         signatureDigest: sign.signatureDigest,
+      },
+      model: {
+        modelVersion: score.modelVersion,
+        modelManifestHash: getPinnedModelManifestHash(modelManifest),
+        modelPinningMode: modelManifest.modelPinningMode,
       },
     },
   };

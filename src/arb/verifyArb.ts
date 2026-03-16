@@ -5,6 +5,11 @@ import type { SourceProvenanceReceipt } from "./provenance";
 
 const DEFAULT_DEV_SIGNING_KEY = "arb-dev-signing-key-insecure";
 const HEX_64_REGEX = /^[0-9a-f]{64}$/;
+const SUPPORTED_ATTESTATION_QUOTE_FORMATS = new Set<ArbAttestationEvidence["quoteFormat"]>([
+  "simulated_quote",
+  "tdx_quote",
+]);
+const SUPPORTED_MODEL_PINNING_MODES = new Set(["exact_manifest_pinned", "service_pinned_private_model"]);
 
 export interface VerifyArbOptions {
   arb: ArbBundle;
@@ -68,7 +73,7 @@ const validateAttestation = (attestation: ArbAttestationEvidence | undefined, er
   if (!["local_dev", "tee_simulated", "tee_verified"].includes(attestation.executionMode)) {
     errors.push("attestation.executionMode must be local_dev, tee_simulated, or tee_verified.");
   }
-  if (attestation.quoteFormat !== "simulated_quote") {
+  if (!SUPPORTED_ATTESTATION_QUOTE_FORMATS.has(attestation.quoteFormat)) {
     errors.push("Unsupported attestation.quoteFormat.");
   }
   if (!isNonEmptyString(attestation.quote)) {
@@ -95,6 +100,10 @@ const validateRequiredFields = (arb: ArbBundle, errors: string[]): void => {
   if (!isNonEmptyString(arb.recommendationType)) errors.push("Missing recommendationType.");
   if (!isNonEmptyString(arb.privacyPolicyId)) errors.push("Missing privacyPolicyId.");
   if (!isNonEmptyString(arb.modelVersion)) errors.push("Missing modelVersion.");
+  if (!isHex64(arb.modelManifestHash)) errors.push("modelManifestHash must be a 64-char lowercase hex string.");
+  if (!SUPPORTED_MODEL_PINNING_MODES.has(String(arb.modelPinningMode || ""))) {
+    errors.push("Invalid modelPinningMode.");
+  }
   if (!arb.recommendation || typeof arb.recommendation !== "object") errors.push("Missing recommendation payload.");
   if (!arb.signature || typeof arb.signature !== "object") errors.push("Missing signature object.");
 
@@ -160,6 +169,8 @@ const validateHashConsistency = (
     expiresAt: arb.expiresAt,
     recommendationType: arb.recommendationType,
     sourceProvenanceHash: arb.sourceProvenanceHash,
+    modelManifestHash: arb.modelManifestHash,
+    modelPinningMode: arb.modelPinningMode,
     privacyPolicyId: arb.privacyPolicyId,
     modelVersion: arb.modelVersion,
     inputHash: arb.inputHash,
@@ -181,6 +192,18 @@ const validateHashConsistency = (
       sourceProvenance.privacyTransformedSnapshotHash || sourceProvenance.normalizedSnapshotHash;
     if (expectedInputHash !== arb.inputHash) {
       errors.push("inputHash mismatch against provided provenance snapshot hash.");
+    }
+    const expectedModelManifestHash = sourceProvenance.executionContext.modelManifestHash;
+    if (!expectedModelManifestHash) {
+      errors.push("Provided provenance is missing modelManifestHash binding.");
+    } else if (expectedModelManifestHash !== arb.modelManifestHash) {
+      errors.push("modelManifestHash mismatch against provided provenance model binding.");
+    }
+    const expectedModelPinningMode = sourceProvenance.executionContext.modelPinningMode;
+    if (!expectedModelPinningMode) {
+      errors.push("Provided provenance is missing modelPinningMode binding.");
+    } else if (expectedModelPinningMode !== arb.modelPinningMode) {
+      errors.push("modelPinningMode mismatch against provided provenance model binding.");
     }
   }
 };
