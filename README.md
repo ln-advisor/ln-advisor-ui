@@ -1,54 +1,99 @@
 # LN Prop Advisor
 
-LN Prop Advisor is a Lightning node analysis tool powered by Lightning Node Connect (LNC), protected data pipelines (Props), and lightweight ML/AI signals. It helps operators make better fee, liquidity, and peer decisions without exporting raw private telemetry.
+LN Prop Advisor is a local-first Lightning operator app built around browser-side telemetry access, privacy-reduced Props payloads, and verifiable recommendation output.
 
-## What It Does
-- Connects to your Lightning node via LNC.
-- Pulls authenticated private telemetry and combines it with public graph context.
-- Applies privacy-preserving feature transforms.
-- Runs a pinned scoring/model workflow.
-- Produces recommendation bundles with clear provenance.
+The intended model is:
+- the operator runs the frontend locally
+- the browser connects to the node through Lightning Node Connect (LNC)
+- raw node telemetry stays in the browser
+- only privacy-reduced data is sent to the recommendation path
+- attestation and verification metadata are shown back in the UI
 
-## Core Idea (Props Applied to Lightning)
-Public graph data is useful but incomplete. The most valuable optimization signals live inside a node’s private state (fees, balances, forward history, failures). Props-style pipelines let us use those signals safely:
-- **Privacy**: only derived features are exposed, not raw telemetry.
-- **Integrity**: recommendations are tied to authenticated data sources.
-- **Pinned inference**: outputs are tied to a known model/version.
+## Current Product State
 
-## Current App Scope
-The current UI focuses on graph-level analysis and operator insight:
-- Graph snapshot and analytics (describeGraph)
-- Channel capacity distributions
-- Fee/ppm behavior by capacity
-- Node connectivity and topology highlights
+Working today:
+- `Channels` page
+- `Verified Phala` route for channel fee recommendations
+- outgoing payload inspector in the UI
+- live app evidence and verification status in the UI
 
-This aligns with the MVP focus: start with graph + authenticated node data, then add recommendation bundles.
+Not yet moved to the verified Phala path:
+- `Node Analysis`
+- `Opening Recs`
 
-## MVP Recommendations (Planned)
-For the hackathon MVP we target two recommendation types:
-1. Dynamic fee recommendations
-2. Forward-opportunity ranking
+## Docs
 
-Each recommendation will be packaged as an **Attested Recommendation Bundle (ARB)** with provenance metadata.
+Start here:
+- [docs/README.md](./docs/README.md)
 
-## Tech
-- React + Vite
-- Lightning Node Connect (`@lightninglabs/lnc-web`)
-- Recharts for visualization
+Recommended reading order:
+1. [docs/local-self-hosted.md](./docs/local-self-hosted.md)
+2. [docs/trust-model.md](./docs/trust-model.md)
+3. [docs/channels-phala-verified.md](./docs/channels-phala-verified.md)
+4. [docs/current-scope.md](./docs/current-scope.md)
 
-## Run Locally
-1. Install dependencies:
-   ```bash
-   pnpm install
-   ```
-2. Start dev server:
-   ```bash
-   pnpm dev
-   ```
-3. Open the app:
-   ```text
-   http://localhost:5173
-   ```
+## Quick Start
 
-## Notes
-This project is a prototype of a privacy-preserving intelligence layer for Lightning node operators. It is not a custodian and does not require raw telemetry export.
+Install dependencies:
+
+```bash
+pnpm install
+```
+
+Create a local env file:
+
+```bash
+cp .env.example .env
+```
+
+For the verified `Channels` path, set at least:
+
+```env
+VITE_ENABLE_PHALA_VERIFIED_UI=true
+VITE_PHALA_MINIMAL_APP_URL=https://YOUR-PHALA-APP-URL
+```
+
+Then start the frontend:
+
+```bash
+pnpm dev --host
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+Connect your node through LNC in the browser, open `Channels`, choose a channel, and run `Analyze Channel`.
+
+## Why local-first matters
+
+This project is trying to give Lightning operators a better trust model than "send all your raw node data to someone else's server".
+
+The important property is not "no trust".
+It is:
+
+- trust the local code you choose to run
+- do not send raw telemetry to a backend by default
+- inspect the exact outgoing request in the UI
+- verify the recommendation result and execution evidence
+
+That is why the outgoing payload inspector and self-hosted workflow matter.
+
+## Phala configuration
+
+For the frontend, the Phala app is currently just a configuration value:
+
+- `VITE_PHALA_MINIMAL_APP_URL`
+
+In practice, this should be treated as operator/deployment configuration, not something a normal user edits repeatedly.
+
+## Repository note
+
+The repo also contains:
+- historical step docs in `docs/step-*.md`
+- Phala deployment material in `deploy/phala-minimal-prototype/`
+- local API/server work for the standard non-Phala path
+
+Those are useful for development, but the main user-facing story should start from the docs listed above.

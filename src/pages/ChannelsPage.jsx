@@ -5,6 +5,10 @@ import {
     postVerify,
     postAnalyzeGemini,
 } from '../api/telemetryClient';
+import {
+    getPhalaUiConfig,
+    runPhalaVerifiedRecommendation,
+} from '../api/phalaClient';
 import { normalizeSnapshot } from '../normalization/normalizeSnapshot';
 import { applyPrivacyPolicy } from '../privacy/applyPrivacyPolicy';
 
@@ -19,6 +23,69 @@ const shortChan = (id) => {
     if (!id) return '—';
     const s = String(id);
     return s.length > 10 ? `…${s.slice(-8)}` : s;
+};
+
+const shortHash = (value) => {
+    if (!value) return 'â€”';
+    const s = String(value);
+    return s.length > 18 ? `${s.slice(0, 8)}â€¦${s.slice(-8)}` : s;
+};
+
+const jsonByteLength = (value) => {
+    try {
+        return new TextEncoder().encode(JSON.stringify(value)).length;
+    } catch (_error) {
+        return 0;
+    }
+};
+
+const getStandardApiBaseUrl = () => String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+
+const PHALA_UI_CONFIG = getPhalaUiConfig();
+const getPhalaTransportBaseUrl = () => import.meta.env.DEV ? '/__phala' : (PHALA_UI_CONFIG.appUrl || '');
+
+const normalizePolicy = (policy) => {
+    if (!policy) return null;
+    return {
+        feeRateMilliMsat: policy.feeRateMilliMsat ?? policy.fee_rate_milli_msat ?? policy.feeRatePpm ?? policy.fee_rate_ppm ?? 0,
+        feeBaseMsat: policy.feeBaseMsat ?? policy.fee_base_msat ?? 0,
+        timeLockDelta: policy.timeLockDelta ?? policy.time_lock_delta ?? 0,
+        minHtlc: policy.minHtlc ?? policy.min_htlc ?? policy.minHtlcMsat ?? policy.min_htlc_msat ?? '0',
+        maxHtlcMsat: policy.maxHtlcMsat ?? policy.max_htlc_msat ?? '0',
+        disabled: Boolean(policy.disabled),
+    };
+};
+
+const buildMockChannelInfoMap = (snapshot) => {
+    const channels = Array.isArray(snapshot?.channels) ? snapshot.channels : [];
+    const feePolicies = Array.isArray(snapshot?.feePolicies) ? snapshot.feePolicies : [];
+    const localNodePubkey = String(snapshot?.nodeInfo?.identityPubkey || snapshot?.nodeInfo?.identity_pubkey || '').toLowerCase();
+    const policyMap = new Map();
+
+    feePolicies.forEach((policy) => {
+        const channelId = String(policy.channelId || policy.channel_id || '');
+        if (!channelId) return;
+        const entry = policyMap.get(channelId) || [];
+        entry.push(policy);
+        policyMap.set(channelId, entry);
+    });
+
+    return channels.reduce((acc, channel) => {
+        const channelId = String(channel.chanId || channel.chan_id || '');
+        const remotePubkey = String(channel.remotePubkey || channel.remote_pubkey || '').toLowerCase();
+        const policies = policyMap.get(channelId) || [];
+        const myPolicy = policies.find((policy) => String(policy.directionPubKey || policy.direction_pub_key || '').toLowerCase() === localNodePubkey) || null;
+        const peerPolicy = policies.find((policy) => String(policy.directionPubKey || policy.direction_pub_key || '').toLowerCase() === remotePubkey) || null;
+
+        acc[channelId] = {
+            node1_pub: remotePubkey,
+            node2_pub: localNodePubkey,
+            node1_policy: normalizePolicy(peerPolicy),
+            node2_policy: normalizePolicy(myPolicy),
+        };
+
+        return acc;
+    }, {});
 };
 
 const DataModal = ({ isOpen, onClose, title, data, darkMode }) => {
@@ -71,7 +138,8 @@ const DataModal = ({ isOpen, onClose, title, data, darkMode }) => {
     );
 };
 
-const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
+const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null }) => {
+    const isMockMode = !lnc?.lnd?.lightning && Boolean(mockSnapshot);
     const [chanAliasMap, setChanAliasMap] = useState({});
     const [chanInfoMap, setChanInfoMap] = useState({}); // chanId => { node1_pub, node2_pub, node1_policy, node2_policy }
     const [forwards, setForwards] = useState([]);
@@ -94,6 +162,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
     const [showPayload, setShowPayload] = useState(false);
     const [lastTelemetry, setLastTelemetry] = useState(null);
     const [verifyResult, setVerifyResult] = useState(null);
+    const [analysisMode, setAnalysisMode] = useState(() => (PHALA_UI_CONFIG.available && mockSnapshot ? 'phala_verified' : 'standard'));
+    const [phalaRun, setPhalaRun] = useState(null);
     const [nodeInfo, setNodeInfo] = useState(null);
     const [nodePubkey, setNodePubkey] = useState(null);
     const [peers, setPeers] = useState([]);
@@ -106,13 +176,66 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
     const [pipelineData, setPipelineData] = useState({
         rawMetadata: null,
         normalizedMetadata: null,
-        propsPayload: null
+        propsPayload: null,
+        outgoingInspector: null,
     });
     const [modalConfig, setModalConfig] = useState({
         isOpen: false,
         title: '',
         data: null
     });
+
+    useEffect(() => {
+        if (!isMockMode) return;
+
+        const snapshotChannels = Array.isArray(mockSnapshot?.channels) ? mockSnapshot.channels : [];
+        const snapshotPeers = Array.isArray(mockSnapshot?.peers) ? mockSnapshot.peers : [];
+        const nodeIdentity = String(mockSnapshot?.nodeInfo?.identityPubkey || mockSnapshot?.nodeInfo?.identity_pubkey || '').toLowerCase();
+
+        setNodeInfo(mockSnapshot?.nodeInfo || null);
+        setNodePubkey(mockSnapshot?.nodeInfo?.identityPubkey || mockSnapshot?.nodeInfo?.identity_pubkey || null);
+        setForwards(Array.isArray(mockSnapshot?.forwardingHistory) ? mockSnapshot.forwardingHistory : []);
+        setPeers(snapshotPeers);
+        setMissionControl({ pairs: [] });
+        setPeerFeeError(null);
+
+        const aliasMap = snapshotChannels.reduce((acc, channel, index) => {
+            const channelId = String(channel.chanId || channel.chan_id || '');
+            const remotePubkey = String(channel.remotePubkey || channel.remote_pubkey || '');
+            const peer = snapshotPeers.find((item) => String(item.pubKey || item.pub_key || item.pubkey || '').toLowerCase() === remotePubkey.toLowerCase());
+            acc[channelId] = {
+                remotePubkey,
+                alias: peer?.alias || `mock-peer-${index + 1}`,
+            };
+            return acc;
+        }, {});
+
+        setChanAliasMap(aliasMap);
+        setChanInfoMap(buildMockChannelInfoMap(mockSnapshot));
+
+        const peerPolicies = (Array.isArray(mockSnapshot?.feePolicies) ? mockSnapshot.feePolicies : []).filter((policy) =>
+            String(policy.directionPubKey || policy.direction_pub_key || '').toLowerCase() !== nodeIdentity
+        );
+        const peerFeeValues = peerPolicies
+            .map((policy) => Number(policy.feeRatePpm ?? policy.fee_rate_ppm ?? policy.feeRateMilliMsat ?? policy.fee_rate_milli_msat ?? 0))
+            .filter((value) => Number.isFinite(value));
+
+        const mockStats = peerFeeValues.length
+            ? {
+                avg: peerFeeValues.reduce((sum, value) => sum + value, 0) / peerFeeValues.length,
+                std: 0,
+                min: Math.min(...peerFeeValues),
+                max: Math.max(...peerFeeValues),
+                median: [...peerFeeValues].sort((a, b) => a - b)[Math.floor(peerFeeValues.length / 2)],
+                correctedAvg: peerFeeValues.reduce((sum, value) => sum + value, 0) / peerFeeValues.length,
+                weightedAvg: peerFeeValues.reduce((sum, value) => sum + value, 0) / peerFeeValues.length,
+            }
+            : null;
+
+        setPeerFeeStats(mockStats);
+        setPeerOutFeeStats(mockStats);
+        setPeerFeeSeries({ incoming: peerFeeValues, outgoing: peerFeeValues });
+    }, [isMockMode, mockSnapshot]);
 
     // 1. Fetch channel aliases
     useEffect(() => {
@@ -373,10 +496,324 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
         };
     }, [feeModalOpen, selectedChannel, lnc]);
 
+    const phalaModeEnabled = PHALA_UI_CONFIG.enabled;
+    const phalaModeAvailable = PHALA_UI_CONFIG.available;
+    const activeAnalysisMode = isMockMode && phalaModeAvailable
+        ? 'phala_verified'
+        : (phalaModeAvailable && analysisMode === 'phala_verified' ? 'phala_verified' : 'standard');
+
+    const extractFeeRecommendation = (response) => {
+        const feeRecommendations =
+            response?.recommendation?.feeRecommendations ||
+            response?.recommendationSet?.feeRecommendations ||
+            [];
+
+        if (!Array.isArray(feeRecommendations) || feeRecommendations.length === 0) {
+            return null;
+        }
+
+        return feeRecommendations.find((item) => item.channelRef === 'channel_0001' || item.channelId === selectedChannel?.chanId)
+            || feeRecommendations[0];
+    };
+
+    const buildOutgoingInspector = ({
+        mode,
+        propsPayload,
+        phalaTelemetry,
+        standardResponse = null,
+        phalaResponse = null,
+        networkInAvgPpm = null,
+        networkOutAvgPpm = null,
+    }) => {
+        if (mode === 'phala_verified') {
+            const baseUrl = getPhalaTransportBaseUrl();
+            const recommendBody = { telemetry: phalaTelemetry };
+            const requests = [
+                {
+                    label: 'Recommend',
+                    method: 'POST',
+                    endpoint: `${baseUrl}/api/recommend?full=true`,
+                    bodyBytes: jsonByteLength(recommendBody),
+                    body: recommendBody,
+                },
+                { label: 'Health', method: 'GET', endpoint: `${baseUrl}/health` },
+                { label: 'Info', method: 'GET', endpoint: `${baseUrl}/info?full=true` },
+                { label: 'Attestation', method: 'GET', endpoint: `${baseUrl}/attestation?full=true` },
+            ];
+
+            if (phalaResponse?.recommend && phalaResponse?.info && phalaResponse?.attestation) {
+                const verifyBody = {
+                    transformedSnapshot: phalaResponse.recommend?.transformedSnapshot,
+                    recommendationSet: phalaResponse.recommend?.recommendationSet,
+                    arb: phalaResponse.recommend?.arb,
+                    sourceReceipt: phalaResponse.recommend?.sourceReceipt,
+                    liveAppInfo: phalaResponse.info,
+                    liveAppAttestation: phalaResponse.attestation,
+                };
+                requests.push({
+                    label: 'Verify',
+                    method: 'POST',
+                    endpoint: `${baseUrl}/api/verify`,
+                    bodyBytes: jsonByteLength(verifyBody),
+                    body: verifyBody,
+                });
+            }
+
+            return {
+                route: 'Verified Phala',
+                transport: import.meta.env.DEV ? 'Browser -> localhost Vite proxy -> Phala app' : 'Browser -> Phala app',
+                destination: baseUrl,
+                requests,
+            };
+        }
+
+        const baseUrl = getStandardApiBaseUrl();
+        const recommendBody = {
+            propsPayload,
+            peerFeeContext: {
+                networkInAvgPpm,
+                networkOutAvgPpm,
+            },
+            privacyMode: 'feature_only',
+        };
+        const requests = [
+            {
+                label: 'Recommend',
+                method: 'POST',
+                endpoint: `${baseUrl}/api/recommend/fee-suggestions`,
+                bodyBytes: jsonByteLength(recommendBody),
+                body: recommendBody,
+            },
+        ];
+
+        if (standardResponse?.arb) {
+            const verifyBody = {
+                arb: standardResponse.arb,
+                ...(standardResponse.sourceProvenance ? { sourceProvenance: standardResponse.sourceProvenance } : {}),
+            };
+            requests.push({
+                label: 'Verify',
+                method: 'POST',
+                endpoint: `${baseUrl}/api/verify`,
+                bodyBytes: jsonByteLength(verifyBody),
+                body: verifyBody,
+            });
+        }
+
+        return {
+            route: 'Standard API',
+            transport: 'Browser -> local API server',
+            destination: baseUrl,
+            requests,
+        };
+    };
+
+    const buildSelectedChannelAnalysisInputs = () => {
+        const selectedChannelId = String(selectedChannel?.chanId || '');
+        const currentChannelStats = channelStats.get(selectedChannelId) || {
+            feeOutSats: 0,
+            fwdsOut: 0,
+        };
+
+        const rawTelemetry = {
+            nodeInfo,
+            forwardingHistory: forwards,
+            feePolicies: [{
+                channelId: selectedChannel.chanId,
+                feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
+            }],
+            missionControl,
+        };
+
+        const rawSnapshot = {
+            stage: 'raw_lnd_extraction',
+            collectedAt: new Date().toISOString(),
+            nodeAlias: nodeInfo?.alias || 'unknown-node',
+            channelId: selectedChannel.chanId,
+            peerPubkey: selectedChannel.peerPubkey,
+            _raw: {
+                node: nodeInfo,
+                channel: selectedChannel,
+                peers: peers.filter((p) => (p.pub_key || p.pubKey) === selectedChannel.peerPubkey),
+                missionControlCount: rawTelemetry.missionControl?.pairs?.length || 0
+            }
+        };
+
+        const normalizedSnapshot = normalizeSnapshot({
+            nodeInfo: rawTelemetry.nodeInfo,
+            channels: [{
+                chanId: selectedChannel.chanId,
+                remotePubkey: selectedChannel.peerPubkey,
+                capacity: selectedChannel.capacity,
+                localBalance: selectedChannel.local,
+                remoteBalance: selectedChannel.remote,
+                active: true,
+                networkInAvg: peerFeeStats?.correctedAvg ?? null,
+                networkOutAvg: peerOutFeeStats?.correctedAvg ?? null
+            }],
+            peers,
+            forwardingHistory: rawTelemetry.forwardingHistory,
+            routingFailures: [],
+            feePolicies: rawTelemetry.feePolicies,
+            graphNodes: [],
+            graphEdges: [],
+            nodeCentralityMetrics: [],
+            missionControlPairs: rawTelemetry.missionControl?.pairs || [],
+            collectedAt: new Date().toISOString()
+        });
+
+        const propsSnapshot = applyPrivacyPolicy(normalizedSnapshot, 'feature_only');
+        const phalaTelemetry = {
+            nodeAlias: nodeInfo?.alias || nodeInfo?.identity_pubkey || 'tapvolt-node',
+            channels: [{
+                channelId: selectedChannel.chanId,
+                peerPubkey: selectedChannel.peerPubkey,
+                active: selectedChannel?.active !== false,
+                localBalanceSat: Number(selectedChannel?.local || selectedChannel?.localBalance || selectedChannel?.local_balance || 0),
+                remoteBalanceSat: Number(selectedChannel?.remote || selectedChannel?.remoteBalance || selectedChannel?.remote_balance || 0),
+                outboundFeePpm: getFeeRatePpm(selectedChannel.myPolicy) ?? 0,
+                forwardCount: Number(currentChannelStats?.fwdsOut || 0),
+                revenueSat: Number(currentChannelStats?.feeOutSats || 0),
+                failedForwardCount: 0,
+            }],
+        };
+
+        return {
+            rawTelemetry,
+            rawSnapshot,
+            normalizedSnapshot,
+            propsSnapshot,
+            phalaTelemetry,
+        };
+    };
+
+    const handleRunChannelAnalysis = async () => {
+        if (!lnc?.lnd?.lightning && !isMockMode) {
+            setPropsError('Lightning connection or mock lightning mode is required before running the Props pipeline.');
+            return;
+        }
+
+        if (!selectedChannel) {
+            setPropsError('Select a channel before running analysis.');
+            return;
+        }
+
+        try {
+            setPropsLoading(true);
+            setPropsError(null);
+            setError(null);
+            setPropsRecommendation(null);
+            setVerifyResult(null);
+            setGeminiAnalysis(null);
+            setGeminiLoading(false);
+            setPhalaRun(null);
+
+            const {
+                rawTelemetry,
+                rawSnapshot,
+                normalizedSnapshot,
+                propsSnapshot,
+                phalaTelemetry,
+            } = buildSelectedChannelAnalysisInputs();
+
+            setLastTelemetry(rawTelemetry);
+            setPipelineData({
+                rawMetadata: rawSnapshot,
+                normalizedMetadata: normalizedSnapshot,
+                propsPayload: propsSnapshot,
+                outgoingInspector: buildOutgoingInspector({
+                    mode: activeAnalysisMode,
+                    propsPayload: propsSnapshot,
+                    phalaTelemetry,
+                    networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                    networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                }),
+            });
+
+            console.info('Props Advisor route selection', {
+                isMockMode,
+                phalaModeEnabled,
+                phalaModeAvailable,
+                requestedAnalysisMode: analysisMode,
+                activeAnalysisMode,
+                phalaAppUrl: PHALA_UI_CONFIG.appUrl,
+            });
+
+            if (activeAnalysisMode === 'phala_verified') {
+                const phalaResponse = await runPhalaVerifiedRecommendation(phalaTelemetry);
+                const recommendation = extractFeeRecommendation(phalaResponse.recommend);
+
+                if (!recommendation) {
+                    throw new Error('Phala verified path returned no fee recommendation for the selected channel.');
+                }
+
+                setPropsRecommendation(recommendation);
+                setVerifyResult(phalaResponse.verify);
+                setPhalaRun(phalaResponse);
+                setPipelineData((previous) => ({
+                    ...previous,
+                    outgoingInspector: buildOutgoingInspector({
+                        mode: activeAnalysisMode,
+                        propsPayload: propsSnapshot,
+                        phalaTelemetry,
+                        phalaResponse,
+                        networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                        networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                    }),
+                }));
+                return;
+            }
+
+            const res = await postFeeSuggestion({
+                propsPayload: propsSnapshot,
+                peerFeeContext: {
+                    networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                    networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                },
+                privacyMode: 'feature_only',
+            });
+
+            const recommendation = extractFeeRecommendation(res);
+            if (!recommendation) {
+                throw new Error('Props API returned no fee recommendation for the selected channel.');
+            }
+
+            setPropsRecommendation(recommendation);
+            setPipelineData((previous) => ({
+                ...previous,
+                outgoingInspector: buildOutgoingInspector({
+                    mode: activeAnalysisMode,
+                    propsPayload: propsSnapshot,
+                    phalaTelemetry,
+                    standardResponse: res,
+                    networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                    networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                }),
+            }));
+
+            try {
+                const vRes = await postVerify(res.arb, res.sourceProvenance);
+                setVerifyResult(vRes);
+            } catch (vErr) {
+                console.warn('ARB Verification failed:', vErr);
+                setVerifyResult({ ok: false, error: vErr.message });
+            }
+        } catch (err) {
+            console.error('Props pipeline failed:', err);
+            setPropsRecommendation(null);
+            setVerifyResult(null);
+            setPhalaRun(null);
+            setPropsError(err?.message || 'Props pipeline failed.');
+        } finally {
+            setPropsLoading(false);
+        }
+    };
+
     const handleCloseFeeModal = () => {
         setFeeModalOpen(false);
         setGeminiAnalysis(null);
         setGeminiLoading(false);
+        setPhalaRun(null);
     };
 
     // ── Shared styles ──────────────────────────────────────────────────────────
@@ -905,15 +1342,15 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 <>
                                                     <div className="flex gap-3">
                                                         <div className="flex flex-col justify-between text-[10px] pr-2" style={{ color: 'var(--text-secondary)' }}>
-                                                            {getTicks(inboundHist.maxCount).map((t) => (
-                                                                <div key={`in-tick-${t}`} className="h-0 leading-none">{t}</div>
+                                                            {getTicks(inboundHist.maxCount).map((t, idx) => (
+                                                                <div key={`in-tick-${t}-${idx}`} className="h-0 leading-none">{t}</div>
                                                             ))}
                                                         </div>
                                                         <div className="relative flex-1">
                                                             <div className="absolute inset-0 pointer-events-none">
-                                                                {getTicks(inboundHist.maxCount).map((t) => (
+                                                                {getTicks(inboundHist.maxCount).map((t, idx) => (
                                                                     <div
-                                                                        key={`in-line-${t}`}
+                                                                        key={`in-line-${t}-${idx}`}
                                                                         className="absolute left-0 right-0 h-px"
                                                                         style={{
                                                                             top: `${(1 - t / Math.max(inboundHist.maxCount, 1)) * 100}%`,
@@ -1011,15 +1448,15 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                 <>
                                                     <div className="flex gap-3">
                                                         <div className="flex flex-col justify-between text-[10px] pr-2" style={{ color: 'var(--text-secondary)' }}>
-                                                            {getTicks(outboundHist.maxCount).map((t) => (
-                                                                <div key={`out-tick-${t}`} className="h-0 leading-none">{t}</div>
+                                                            {getTicks(outboundHist.maxCount).map((t, idx) => (
+                                                                <div key={`out-tick-${t}-${idx}`} className="h-0 leading-none">{t}</div>
                                                             ))}
                                                         </div>
                                                         <div className="relative flex-1">
                                                             <div className="absolute inset-0 pointer-events-none">
-                                                                {getTicks(outboundHist.maxCount).map((t) => (
+                                                                {getTicks(outboundHist.maxCount).map((t, idx) => (
                                                                     <div
-                                                                        key={`out-line-${t}`}
+                                                                        key={`out-line-${t}-${idx}`}
                                                                         className="absolute left-0 right-0 h-px"
                                                                         style={{
                                                                             top: `${(1 - t / Math.max(outboundHist.maxCount, 1)) * 100}%`,
@@ -1231,165 +1668,60 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                         <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Protected intelligence fee optimization</p>
                                     </div>
                                 </div>
-                                <button
-                                    onClick={async () => {
-                                        if (!lnc?.lnd?.lightning) {
-                                            setPropsError('Lightning connection is required before running the Props pipeline.');
-                                            return;
-                                        }
-
-                                        setPropsLoading(true);
-                                        setPropsError(null);
-                                        setError(null);
-                                        setVerifyResult(null);
-                                        setGeminiAnalysis(null);
-                                        setGeminiLoading(false);
-
-                                        try {
-                                            const rawTelemetry = {
-                                                nodeInfo: {
-                                                    alias: nodeInfo?.alias || "Local Advisor Node",
-                                                    identityPubkey: nodePubkey || "self-node-pubkey"
-                                                },
-                                                channels: [{
-                                                    chanId: String(selectedChannel.chanId || ''),
-                                                    remotePubkey: selectedChannel.peerPubkey || '',
-                                                    capacity: selectedChannel.capacity || 0,
-                                                    localBalance: selectedChannel.local || 0,
-                                                    remoteBalance: selectedChannel.remote || 0,
-                                                    active: true // Selected channel is active by definition if we are here
-                                                }],
-                                                forwardingHistory: forwards.filter(f => {
-                                                    const timestamp = Number(f.timestamp || 0);
-                                                    const sevenDaysAgo = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
-                                                    const isRecent = timestamp >= sevenDaysAgo;
-                                                    const isSelectedChannel = String(f.chanIdIn || f.chan_id_in) === String(selectedChannel.chanId) ||
-                                                                            String(f.chanIdOut || f.chan_id_out) === String(selectedChannel.chanId);
-                                                    return isRecent && isSelectedChannel;
-                                                }),
-                                                peers: peers.filter(p => (p.pub_key || p.pubKey) === selectedChannel.peerPubkey),
-                                                missionControl: missionControl ? {
-                                                    ...missionControl,
-                                                    pairs: (missionControl.pairs || []).filter(p => p.destination === selectedChannel.peerPubkey)
-                                                } : null,
-                                                feePolicies: [
-                                                    {
-                                                        channelId: selectedChannel.chanId,
-                                                        directionPubKey: nodePubkey || "self-node-pubkey",
-                                                        feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
-                                                    },
-                                                    {
-                                                        channelId: selectedChannel.chanId,
-                                                        directionPubKey: selectedChannel.peerPubkey,
-                                                        feeRatePpm: getFeeRatePpm(selectedChannel.peerPolicy)
-                                                    }
-                                                ],
-                                                metadata: {
-                                                    routingStatsOutMsat: selectedChannel.stats.feeOutMsat,
-                                                    routingStatsInMsat: selectedChannel.stats.feeInMsat,
-                                                    networkInAvg: peerFeeStats?.correctedAvg,
-                                                    networkOutAvg: peerOutFeeStats?.correctedAvg,
-                                                    focusChannelId: selectedChannel.chanId
-                                                },
-                                                peerFeeSeries: { ...peerFeeSeries }
-                                            };
-
-                                            setLastTelemetry(rawTelemetry); // Store RAW for metadata display to avoid crash
-
-                                            // Stage 1: Raw Snapshot
-                                            const rawSnapshot = {
-                                                channelId: selectedChannel.chanId,
-                                                peerPubkey: selectedChannel.peerPubkey,
-                                                _raw: {
-                                                    node: nodeInfo,
-                                                    channel: selectedChannel,
-                                                    peers: peers.filter(p => (p.pub_key || p.pubKey) === selectedChannel.peerPubkey),
-                                                    missionControlCount: rawTelemetry.missionControl?.pairs?.length || 0
-                                                }
-                                            };
-
-                                            // Stage 2: Normalization
-                                            const normalizedSnapshot = normalizeSnapshot({
-                                                nodeInfo: rawTelemetry.nodeInfo,
-                                                channels: [{
-                                                    chanId: selectedChannel.chanId,
-                                                    remotePubkey: selectedChannel.peerPubkey,
-                                                    capacity: selectedChannel.capacity,
-                                                    localBalance: selectedChannel.local,
-                                                    remoteBalance: selectedChannel.remote,
-                                                    active: true,
-                                                    networkInAvg: peerFeeStats?.correctedAvg ?? null,
-                                                    networkOutAvg: peerOutFeeStats?.correctedAvg ?? null
-                                                }],
-                                                peers,
-                                                forwardingHistory: rawTelemetry.forwardingHistory,
-                                                routingFailures: [], // Not currently collected per-channel
-                                                feePolicies: rawTelemetry.feePolicies,
-                                                graphNodes: [], // Minimal for single channel analysis
-                                                graphEdges: [],
-                                                nodeCentralityMetrics: [],
-                                                missionControlPairs: rawTelemetry.missionControl?.pairs || [],
-                                                collectedAt: new Date().toISOString()
-                                            });
-
-                                            // Stage 3: PROPS Payload
-                                            const propsSnapshot = applyPrivacyPolicy(normalizedSnapshot, 'feature_only');
-
-                                             setPipelineData({
-                                                rawMetadata: rawSnapshot,
-                                                normalizedMetadata: normalizedSnapshot,
-                                                propsPayload: propsSnapshot
-                                            });
-
-                                            // ── Fee Suggestion ────────────────────────────────────
-                                            // Route: POST /api/recommend/fee-suggestions
-                                            // Payload: PROPS feature_only state scoped to
-                                            // this single channel (liquidity ratios, forwarding
-                                            // counts, fee policies). No raw pubkeys or balances.
-                                            // peerFeeContext adds network avg fee stats collected
-                                            // from the peer's other channels (local to client only).
-                                            const res = await postFeeSuggestion({
-                                                propsPayload: propsSnapshot,
-                                                peerFeeContext: {
-                                                    networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
-                                                    networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
-                                                },
-                                                privacyMode: 'feature_only',
-                                            });
-
-                                            if (res && res.recommendation && res.recommendation.feeRecommendations && res.recommendation.feeRecommendations.length > 0) {
-                                                // Since we only sent one channel, it should be the only one or we find it
-                                                const rec = res.recommendation.feeRecommendations.find(r => r.channelRef === `channel_0001` || r.channelId === selectedChannel.chanId)
-                                                    || res.recommendation.feeRecommendations[0];
-
-                                                setPropsRecommendation(rec);
-
-                                                // Post Verify (Full pipeline)
-                                                try {
-                                                    const vRes = await postVerify(res.arb, res.sourceProvenance);
-                                                    setVerifyResult(vRes);
-                                                } catch (vErr) {
-                                                    console.warn('ARB Verification failed:', vErr);
-                                                    setVerifyResult({ ok: false, error: vErr.message });
-                                                }
-                                            } else {
-                                                throw new Error('Props API returned no fee recommendation for the selected channel.');
-                                            }
-                                        } catch (err) {
-                                            console.error('Props pipeline failed:', err);
-                                            setPropsRecommendation(null);
-                                            setVerifyResult(null);
-                                            setPropsError(err?.message || 'Props pipeline failed.');
-                                        } finally {
-                                            setPropsLoading(false);
-                                        }
-                                    }}
-                                    disabled={propsLoading}
-                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-md ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
-                                    style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
-                                >
-                                    {propsLoading ? 'Running Props...' : propsRecommendation ? 'Re-run Analysis' : 'Analyze Channel'}
-                                </button>
+                                <div className="flex flex-col items-end gap-2">
+                                    {phalaModeEnabled && (
+                                        <div className="flex flex-col items-end gap-1">
+                                            <div className="flex items-center gap-1 rounded-lg border p-1"
+                                                style={{
+                                                    borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+                                                    backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                                                }}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setAnalysisMode('standard')}
+                                                    className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest transition-all"
+                                                    style={{
+                                                        backgroundColor: activeAnalysisMode === 'standard' ? 'rgba(34,211,238,0.16)' : 'transparent',
+                                                        color: activeAnalysisMode === 'standard' ? 'var(--accent-1)' : 'var(--text-secondary)',
+                                                    }}
+                                                >
+                                                    Standard
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => phalaModeAvailable && setAnalysisMode('phala_verified')}
+                                                    disabled={!phalaModeAvailable}
+                                                    className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest transition-all ${!phalaModeAvailable ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                                    style={{
+                                                        backgroundColor: activeAnalysisMode === 'phala_verified' ? 'rgba(59,130,246,0.18)' : 'transparent',
+                                                        color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)',
+                                                    }}
+                                                    title={phalaModeAvailable ? 'Use the Phala verified path' : (PHALA_UI_CONFIG.reason || 'Phala verified path is unavailable')}
+                                                >
+                                                    Verified Phala
+                                                </button>
+                                            </div>
+                                            {!phalaModeAvailable && (
+                                                <span className="text-[10px]" style={{ color: darkMode ? '#fda4af' : '#9f1239' }}>
+                                                    {PHALA_UI_CONFIG.reason || 'Phala verified path is unavailable.'}
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={handleRunChannelAnalysis}
+                                        disabled={propsLoading}
+                                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-md ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
+                                        style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
+                                    >
+                                        {propsLoading
+                                            ? (activeAnalysisMode === 'phala_verified' ? 'Running Verified Phala...' : 'Running Props...')
+                                            : propsRecommendation
+                                                ? 'Re-run Analysis'
+                                                : 'Analyze Channel'}
+                                    </button>
+                                </div>
                             </div>
 
                             {propsError && (
@@ -1456,11 +1788,73 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                             </div>
 
                                             <div className="flex items-center justify-between">
+                                                <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Analysis Route</span>
+                                                <span className="font-mono text-xs" style={{ color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)' }}>
+                                                    {activeAnalysisMode === 'phala_verified' ? 'Verified Phala' : 'Standard API'}
+                                                </span>
+                                            </div>
+
+                                            <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Verification</span>
                                                 <span className="font-mono text-xs" style={{ color: verifyResult?.ok ? '#22c55e' : '#f97316' }}>
                                                     {verifyResult ? (verifyResult.ok ? 'ARB verified' : 'Verification failed') : 'Pending'}
                                                 </span>
                                             </div>
+
+                                            {phalaRun && (
+                                                <div className="rounded-xl p-4 space-y-3"
+                                                    style={{
+                                                        backgroundColor: darkMode ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.06)',
+                                                        border: `1px solid ${darkMode ? 'rgba(96,165,250,0.18)' : 'rgba(59,130,246,0.14)'}`,
+                                                    }}>
+                                                    <div className="flex items-center justify-between">
+                                                        <h5 className="text-[10px] font-bold uppercase tracking-widest text-blue-400">Phala Trust Status</h5>
+                                                        <span className="text-[10px] font-mono" style={{ color: verifyResult?.ok ? '#22c55e' : '#f97316' }}>
+                                                            {verifyResult?.ok ? 'Verified' : 'Needs review'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Signer</span>
+                                                            <span className="font-mono" style={{ color: 'var(--text-primary)' }}>
+                                                                {shortHash(verifyResult?.signerPolicy?.providerRuntimeId || verifyResult?.signerPolicy?.allowedSignerProviderId)}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Signer Type</span>
+                                                            <span className="font-mono" style={{ color: 'var(--text-primary)' }}>
+                                                                {verifyResult?.signerPolicy?.expectedSignerProviderType || 'â€”'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Quote Check</span>
+                                                            <span className="font-mono" style={{ color: phalaRun?.verify?.cloudVerification?.quoteVerified ? '#22c55e' : '#f97316' }}>
+                                                                {phalaRun?.verify?.cloudVerification?.quoteVerified ? 'Cloud verified' : 'Unavailable'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Measurement</span>
+                                                            <span className="font-mono" style={{ color: phalaRun?.health?.measurementPolicy?.pinned ? '#22c55e' : '#f97316' }}>
+                                                                {phalaRun?.health?.measurementPolicy?.pinned
+                                                                    ? shortHash(phalaRun?.health?.measurementPolicy?.allowedMeasurement)
+                                                                    : 'Not pinned'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Attestation Source</span>
+                                                            <span className="font-mono" style={{ color: 'var(--text-primary)' }}>
+                                                                {phalaRun?.health?.attestationSource || 'â€”'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Live Evidence</span>
+                                                            <span className="font-mono" style={{ color: verifyResult?.liveAppEvidencePolicy?.requireLiveAppEvidence ? '#22c55e' : 'var(--text-secondary)' }}>
+                                                                {verifyResult?.liveAppEvidencePolicy?.requireLiveAppEvidence ? 'Required' : 'Optional'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
 
                                             {(propsRecommendation.reasonCodes || propsRecommendation.reasons)?.length > 0 && (
                                                 <div>
@@ -1604,7 +1998,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
 
                                     {showPipeline && (
                                         <div className="px-5 pb-6 animate-fade-in space-y-4">
-                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                                                 {/* Stage 1: Raw */}
                                                 <div className="rounded-xl p-4 space-y-3" style={{ backgroundColor: 'rgba(0,0,0,0.2)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
                                                     <div className="flex items-center gap-2">
@@ -1647,6 +2041,25 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [] }) => {
                                                         onClick={() => setModalConfig({ isOpen: true, title: 'Stage 3: PROPS Final Payload', data: pipelineData.propsPayload })}
                                                     >
                                                         Inspect Payload
+                                                    </button>
+                                                </div>
+
+                                                <div className="rounded-xl p-4 space-y-3" style={{ backgroundColor: 'rgba(0,0,0,0.2)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-5 h-5 rounded-md bg-violet-500/20 text-violet-400 flex items-center justify-center text-[10px] font-bold">4</div>
+                                                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-violet-400/80">Outgoing Request</h4>
+                                                    </div>
+                                                    <div className="space-y-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                                                        <p>Route: <span style={{ color: 'var(--text-primary)' }}>{pipelineData.outgoingInspector?.route || 'Unavailable'}</span></p>
+                                                        <p>Transport: <span style={{ color: 'var(--text-primary)' }}>{pipelineData.outgoingInspector?.transport || 'Unavailable'}</span></p>
+                                                        <p>Requests: <span style={{ color: 'var(--text-primary)' }}>{pipelineData.outgoingInspector?.requests?.length || 0}</span></p>
+                                                    </div>
+                                                    <button
+                                                        className="w-full py-1.5 rounded-lg bg-violet-500/10 text-violet-400 text-[10px] font-bold uppercase border border-violet-500/20 hover:bg-violet-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 4: Outgoing Browser Requests', data: pipelineData.outgoingInspector })}
+                                                        disabled={!pipelineData.outgoingInspector}
+                                                    >
+                                                        Inspect Requests
                                                     </button>
                                                 </div>
                                             </div>

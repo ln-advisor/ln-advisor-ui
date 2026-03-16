@@ -33,7 +33,22 @@ export interface RecommendApiRequest {
   issuedAt?: string;
 }
 
-const API_BASE = (import.meta as any)?.env?.VITE_API_BASE_URL || "";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+
+const parseJsonResponse = async (response: Response): Promise<any> => {
+  const text = await response.text();
+  if (!text.trim()) {
+    if (!response.ok) {
+      throw new Error(`API request failed with empty response (${response.status}).`);
+    }
+    throw new Error(`API returned an empty response (${response.status}).`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    throw new Error(`API returned invalid JSON (${response.status}).`);
+  }
+};
 
 const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -41,7 +56,7 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const payload = await response.json();
+  const payload = await parseJsonResponse(response);
   if (!response.ok) {
     throw new Error((payload && payload.error) || `API request failed for ${path}`);
   }

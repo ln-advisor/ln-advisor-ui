@@ -9,13 +9,21 @@ services:
     environment:
       API_PORT: "8787"
       PROTOTYPE_SERVICE_NAME: "ln-advisor-phala-minimal"
-      PROTOTYPE_SIGNER_PROVIDER_TYPE: "env_hmac"
-      PROTOTYPE_SIGNER_PROVIDER_ID: "prototype-env-signer-v3"
+      PROTOTYPE_SIGNER_PROVIDER_TYPE: "released_keyring"
+      PROTOTYPE_SIGNER_PROVIDER_ID: "prototype-released-signer-v1"
       PROTOTYPE_SIGNER_PROVIDER_UNAVAILABLE_REASON: "phala-kms-stub-unavailable"
       PROTOTYPE_ARB_SIGNING_KEY: "step55-live-signing-key-20260314"
       PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY: "true"
-      PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID: "prototype-env-signer-v3"
-      PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE: "env_hmac"
+      PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID: "prototype-released-signer-v1"
+      PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE: "released_keyring"
+      PROTOTYPE_RELEASED_SIGNER_KEY_ID: "arb-signer-phala-minimal-v1"
+      PROTOTYPE_RELEASED_SIGNER_KEY_PROVIDER_ID: "prototype-released-signing-key-provider-v1"
+      PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON: "{\"arb-signer-phala-minimal-v1\":\"step56-live-released-signing-key-20260316\"}"
+      PROTOTYPE_RELEASED_SIGNER_REQUIRE_ATTESTATION: "true"
+      PROTOTYPE_RELEASED_SIGNER_MIN_EXECUTION_MODE: "tee_verified"
+      PROTOTYPE_RELEASED_SIGNER_ALLOWED_PROVIDER_IDS: "phala-cloud"
+      PROTOTYPE_RELEASED_SIGNER_ALLOWED_MEASUREMENTS: "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077"
+      PROTOTYPE_RELEASED_SIGNER_ALLOWED_QUOTE_FORMATS: "tdx_quote"
       PROTOTYPE_ATTESTATION_INCLUDE: "true"
       PROTOTYPE_ATTESTATION_PROVIDER_ID: "phala-cloud"
       PROTOTYPE_ATTESTATION_EXECUTION_MODE: "tee_verified"
@@ -52,6 +60,42 @@ services:
         const PORT = Number.parseInt(process.env.API_PORT || "8787", 10);
         const SERVICE_NAME = process.env.PROTOTYPE_SERVICE_NAME || "ln-advisor-phala-minimal";
         
+        function parseCsvEnv(value) {
+          if (!value || typeof value !== "string") return null;
+          const parsed = value
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+          return parsed.length > 0 ? parsed : null;
+        }
+        
+        function parseJsonObjectEnv(value, envName) {
+          let parsed;
+          try {
+            parsed = JSON.parse(value);
+          } catch (error) {
+            throw new Error(`Invalid JSON in $${envName}: $${error instanceof Error ? error.message : String(error)}`);
+          }
+        
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error(`$${envName} must be a JSON object map of keyId -> keyMaterial.`);
+          }
+        
+          const keyring = {};
+          for (const [key, rawValue] of Object.entries(parsed)) {
+            const keyId = String(key || "").trim();
+            const keyMaterial = typeof rawValue === "string" ? rawValue.trim() : "";
+            if (!keyId || !keyMaterial) continue;
+            keyring[keyId] = keyMaterial;
+          }
+        
+          if (Object.keys(keyring).length === 0) {
+            throw new Error(`$${envName} must contain at least one non-empty keyId -> keyMaterial pair.`);
+          }
+        
+          return keyring;
+        }
+        
         const DEFAULT_PROTOTYPE_ARB_SIGNING_KEY = "prototype-dev-signing-key-change-me";
         const PROTOTYPE_ARB_SIGNING_KEY =
           process.env.PROTOTYPE_ARB_SIGNING_KEY || DEFAULT_PROTOTYPE_ARB_SIGNING_KEY;
@@ -68,6 +112,22 @@ services:
           (process.env.PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID || PROTOTYPE_SIGNER_PROVIDER_ID).trim();
         const PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE =
           (process.env.PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE || PROTOTYPE_SIGNER_PROVIDER_TYPE).trim();
+        const PROTOTYPE_RELEASED_SIGNER_KEY_ID =
+          (process.env.PROTOTYPE_RELEASED_SIGNER_KEY_ID || "").trim();
+        const PROTOTYPE_RELEASED_SIGNER_KEY_PROVIDER_ID =
+          (process.env.PROTOTYPE_RELEASED_SIGNER_KEY_PROVIDER_ID || "prototype-released-signing-key-provider-v1").trim();
+        const PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON =
+          (process.env.PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON || "").trim();
+        const PROTOTYPE_RELEASED_SIGNER_REQUIRE_ATTESTATION =
+          process.env.PROTOTYPE_RELEASED_SIGNER_REQUIRE_ATTESTATION !== "false";
+        const PROTOTYPE_RELEASED_SIGNER_MIN_EXECUTION_MODE =
+          (process.env.PROTOTYPE_RELEASED_SIGNER_MIN_EXECUTION_MODE || "tee_verified").trim();
+        const PROTOTYPE_RELEASED_SIGNER_ALLOWED_PROVIDER_IDS_RAW =
+          (process.env.PROTOTYPE_RELEASED_SIGNER_ALLOWED_PROVIDER_IDS || "").trim();
+        const PROTOTYPE_RELEASED_SIGNER_ALLOWED_MEASUREMENTS_RAW =
+          (process.env.PROTOTYPE_RELEASED_SIGNER_ALLOWED_MEASUREMENTS || "").trim();
+        const PROTOTYPE_RELEASED_SIGNER_ALLOWED_QUOTE_FORMATS_RAW =
+          (process.env.PROTOTYPE_RELEASED_SIGNER_ALLOWED_QUOTE_FORMATS || "").trim();
         
         const PROTOTYPE_ATTESTATION_INCLUDE = process.env.PROTOTYPE_ATTESTATION_INCLUDE !== "false";
         const PROTOTYPE_ATTESTATION_PROVIDER_ID =
@@ -123,6 +183,12 @@ services:
           (process.env.PROTOTYPE_SOURCE_RECEIPT_COLLECTED_AT || "2026-03-13T00:00:00Z").trim();
         const PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT =
           process.env.PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT === "true";
+        const PROTOTYPE_RELEASED_SIGNER_ALLOWED_PROVIDER_IDS =
+          parseCsvEnv(PROTOTYPE_RELEASED_SIGNER_ALLOWED_PROVIDER_IDS_RAW) || [PROTOTYPE_ATTESTATION_PROVIDER_ID];
+        const PROTOTYPE_RELEASED_SIGNER_ALLOWED_MEASUREMENTS =
+          parseCsvEnv(PROTOTYPE_RELEASED_SIGNER_ALLOWED_MEASUREMENTS_RAW) || [PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT];
+        const PROTOTYPE_RELEASED_SIGNER_ALLOWED_QUOTE_FORMATS =
+          parseCsvEnv(PROTOTYPE_RELEASED_SIGNER_ALLOWED_QUOTE_FORMATS_RAW) || [PROTOTYPE_ATTESTATION_QUOTE_FORMAT];
         
         const compareText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
         
@@ -321,6 +387,61 @@ services:
           pinRecommended: canUseDstackRuntimeAttestation() && isPlaceholderRuntimeMeasurement(PROTOTYPE_VERIFY_ALLOWED_MEASUREMENT),
         });
         
+        const buildReleasedSignerPolicy = () => ({
+          schemaVersion: "prototype-released-signer-policy-v1",
+          keyId: PROTOTYPE_RELEASED_SIGNER_KEY_ID,
+          requireAttestation: PROTOTYPE_RELEASED_SIGNER_REQUIRE_ATTESTATION,
+          minExecutionMode: PROTOTYPE_RELEASED_SIGNER_MIN_EXECUTION_MODE,
+          allowedProviderIds: [...PROTOTYPE_RELEASED_SIGNER_ALLOWED_PROVIDER_IDS],
+          allowedMeasurements: [...PROTOTYPE_RELEASED_SIGNER_ALLOWED_MEASUREMENTS],
+          allowedQuoteFormats: [...PROTOTYPE_RELEASED_SIGNER_ALLOWED_QUOTE_FORMATS],
+        });
+        
+        const evaluateReleasedSignerPolicy = (attestation, policy) => {
+          const errors = [];
+          const warnings = [];
+        
+          if (!attestation || typeof attestation !== "object") {
+            if (policy.requireAttestation || modeRank(policy.minExecutionMode) > 0) {
+              errors.push("Attestation evidence is required for released signer key release but missing.");
+            } else {
+              warnings.push("Released signer key was released without attestation due to policy configuration.");
+            }
+        
+            return {
+              ok: errors.length === 0,
+              errors,
+              warnings,
+              keyId: errors.length === 0 ? policy.keyId : null,
+            };
+          }
+        
+          if (modeRank(attestation.executionMode) < modeRank(policy.minExecutionMode)) {
+            errors.push(
+              `Execution mode $${attestation.executionMode} does not satisfy minimum $${policy.minExecutionMode} for released signer key release.`
+            );
+          }
+        
+          if (policy.allowedProviderIds.length > 0 && !policy.allowedProviderIds.includes(attestation.providerId)) {
+            errors.push(`Provider $${attestation.providerId} is not allowed for released signer key release.`);
+          }
+        
+          if (policy.allowedMeasurements.length > 0 && !policy.allowedMeasurements.includes(attestation.measurement)) {
+            errors.push("Attestation measurement is not allowed for released signer key release.");
+          }
+        
+          if (policy.allowedQuoteFormats.length > 0 && !policy.allowedQuoteFormats.includes(attestation.quoteFormat)) {
+            errors.push(`Quote format $${attestation.quoteFormat} is not allowed for released signer key release.`);
+          }
+        
+          return {
+            ok: errors.length === 0,
+            errors,
+            warnings,
+            keyId: errors.length === 0 ? policy.keyId : null,
+          };
+        };
+        
         const classifyLiquidityBand = (localBalanceRatio) => {
           if (localBalanceRatio < 0.33) return "LOW";
           if (localBalanceRatio < 0.67) return "MEDIUM";
@@ -437,10 +558,7 @@ services:
         const buildPrototypeAppCompose = () => ({
           schemaVersion: "prototype-app-compose-v1",
           serviceName: SERVICE_NAME,
-          signerProvider: {
-            providerId: SIGNER_PROVIDER.providerId,
-            providerType: SIGNER_PROVIDER.providerType,
-          },
+          signerProvider: buildSignerProviderStatus(),
           attestationDefaults: {
             providerId: PROTOTYPE_ATTESTATION_PROVIDER_ID,
             executionMode: PROTOTYPE_ATTESTATION_EXECUTION_MODE,
@@ -609,10 +727,7 @@ services:
           tcb_info: {
             app_compose: buildPrototypeAppComposeString(),
           },
-          signerProvider: {
-            providerId: SIGNER_PROVIDER.providerId,
-            providerType: SIGNER_PROVIDER.providerType,
-          },
+          signerProvider: buildSignerProviderStatus(),
         });
         
         const buildPrototypeSyntheticAttestationPayload = () => {
@@ -682,10 +797,7 @@ services:
                 ...(runtimeAppCompose ? { app_compose: runtimeAppCompose } : {}),
                 ...(runtimeComposeHash ? { compose_hash: runtimeComposeHash } : {}),
               },
-              signerProvider: {
-                providerId: SIGNER_PROVIDER.providerId,
-                providerType: SIGNER_PROVIDER.providerType,
-              },
+              signerProvider: buildSignerProviderStatus(),
             };
             const attestationPayload = {
               schemaVersion: "prototype-app-attestation-v1",
@@ -818,6 +930,17 @@ services:
           };
         };
         
+        const buildSignerKeyPolicy = (runtime, extra = {}) => ({
+          requireExplicitKey: runtime.requireExplicitKey === true,
+          keySource: runtime.keySource,
+          signerProviderId: runtime.providerId,
+          signerProviderType: runtime.providerType,
+          signingMode: runtime.signingMode,
+          ...(runtime.keyProviderId ? { keyProviderId: runtime.keyProviderId } : {}),
+          ...(runtime.releasedSignerPolicy ? { releasedSignerPolicy: runtime.releasedSignerPolicy } : {}),
+          ...extra,
+        });
+        
         const createSignerProviderRuntime = () => {
           if (PROTOTYPE_SIGNER_PROVIDER_TYPE === "env_hmac") {
             return {
@@ -826,6 +949,9 @@ services:
               algorithm: "hmac-sha256",
               keyId: PROTOTYPE_ARB_KEY_ID,
               keySource: "env_shared_secret",
+              signingMode: "prototype_hmac",
+              requireExplicitKey: PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY,
+              requiresAttestation: false,
               getReadiness() {
                 if (
                   PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY &&
@@ -834,23 +960,13 @@ services:
                   return {
                     ok: false,
                     error: "Explicit non-default signing key required by policy.",
-                    keyPolicy: {
-                      requireExplicitKey: true,
-                      keySource: this.keySource,
-                      signerProviderId: this.providerId,
-                      signerProviderType: this.providerType,
-                    },
+                    keyPolicy: buildSignerKeyPolicy(this, { requireExplicitKey: true }),
                   };
                 }
         
                 return {
                   ok: true,
-                  keyPolicy: {
-                    requireExplicitKey: PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY,
-                    keySource: this.keySource,
-                    signerProviderId: this.providerId,
-                    signerProviderType: this.providerType,
-                  },
+                  keyPolicy: buildSignerKeyPolicy(this),
                 };
               },
               signDigest(digest) {
@@ -886,6 +1002,157 @@ services:
             };
           }
         
+          if (PROTOTYPE_SIGNER_PROVIDER_TYPE === "released_keyring") {
+            const releasedSignerPolicy = buildReleasedSignerPolicy();
+            let keyring = {};
+            const configErrors = [];
+        
+            if (!PROTOTYPE_RELEASED_SIGNER_KEY_ID) {
+              configErrors.push("PROTOTYPE_RELEASED_SIGNER_KEY_ID is required for signerProviderType released_keyring.");
+            }
+            if (!PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON) {
+              configErrors.push("PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON is required for signerProviderType released_keyring.");
+            }
+            if (!PROTOTYPE_ATTESTATION_INCLUDE) {
+              configErrors.push("released_keyring signer provider requires PROTOTYPE_ATTESTATION_INCLUDE=true.");
+            }
+        
+            if (PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON) {
+              try {
+                keyring = parseJsonObjectEnv(PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON, "PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON");
+              } catch (error) {
+                configErrors.push(error instanceof Error ? error.message : String(error));
+              }
+            }
+        
+            if (
+              PROTOTYPE_RELEASED_SIGNER_KEY_ID &&
+              Object.keys(keyring).length > 0 &&
+              !Object.prototype.hasOwnProperty.call(keyring, PROTOTYPE_RELEASED_SIGNER_KEY_ID)
+            ) {
+              configErrors.push(
+                `PROTOTYPE_RELEASED_SIGNER_KEYRING_JSON is missing keyId $${PROTOTYPE_RELEASED_SIGNER_KEY_ID}.`
+              );
+            }
+        
+            return {
+              providerId: PROTOTYPE_SIGNER_PROVIDER_ID,
+              providerType: "released_keyring",
+              algorithm: "hmac-sha256",
+              keyId: PROTOTYPE_RELEASED_SIGNER_KEY_ID,
+              keySource: PROTOTYPE_RELEASED_SIGNER_KEY_PROVIDER_ID,
+              keyProviderId: PROTOTYPE_RELEASED_SIGNER_KEY_PROVIDER_ID,
+              signingMode: "released_signer",
+              requireExplicitKey: true,
+              requiresAttestation: true,
+              releasedSignerPolicy,
+              getReadiness() {
+                if (configErrors.length > 0) {
+                  return {
+                    ok: false,
+                    error: configErrors.join(" | "),
+                    keyPolicy: buildSignerKeyPolicy(this, {
+                      releaseConfigured: false,
+                    }),
+                  };
+                }
+        
+                return {
+                  ok: true,
+                  keyPolicy: buildSignerKeyPolicy(this, {
+                    releaseConfigured: true,
+                  }),
+                };
+              },
+              releaseKey(attestation) {
+                if (configErrors.length > 0) {
+                  return {
+                    ok: false,
+                    errors: [...configErrors],
+                    warnings: [],
+                    keyId: null,
+                    keyMaterial: null,
+                    keySource: this.keySource,
+                  };
+                }
+        
+                const decision = evaluateReleasedSignerPolicy(attestation, releasedSignerPolicy);
+                if (!decision.ok || !decision.keyId) {
+                  return {
+                    ok: false,
+                    errors: decision.errors,
+                    warnings: decision.warnings,
+                    keyId: null,
+                    keyMaterial: null,
+                    keySource: this.keySource,
+                  };
+                }
+        
+                const keyMaterial = keyring[decision.keyId];
+                if (!keyMaterial) {
+                  return {
+                    ok: false,
+                    errors: [`Released signer keyId $${decision.keyId} was not found in the configured keyring.`],
+                    warnings: decision.warnings,
+                    keyId: null,
+                    keyMaterial: null,
+                    keySource: this.keySource,
+                  };
+                }
+        
+                return {
+                  ok: true,
+                  errors: [],
+                  warnings: decision.warnings,
+                  keyId: decision.keyId,
+                  keyMaterial,
+                  keySource: this.keySource,
+                };
+              },
+              signDigest(digest, options = {}) {
+                const release = this.releaseKey(options.attestation || null);
+                if (!release.ok || !release.keyMaterial || !release.keyId) {
+                  throw new Error(`Released signer key release denied: $${release.errors.join(" | ")}`);
+                }
+        
+                return {
+                  algorithm: this.algorithm,
+                  keyId: release.keyId,
+                  keySource: release.keySource,
+                  signerProviderId: this.providerId,
+                  signerProviderType: this.providerType,
+                  value: hmacSha256Hex(digest, release.keyMaterial),
+                };
+              },
+              verifyDigest(digest, signature) {
+                const errors = [];
+                const signatureKeyId = typeof signature?.keyId === "string" ? signature.keyId : this.keyId;
+                const keyMaterial = signatureKeyId ? keyring[signatureKeyId] : null;
+                const expectedSignature = keyMaterial ? hmacSha256Hex(digest, keyMaterial) : null;
+        
+                if (signature?.algorithm !== this.algorithm) errors.push("signature.algorithm mismatch.");
+                if (signature?.keyId !== this.keyId) errors.push("signature.keyId mismatch.");
+                if (signature?.keySource !== this.keySource) errors.push("signature.keySource mismatch.");
+                if (signature?.signerProviderId !== PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID) {
+                  errors.push("signature.signerProviderId mismatch.");
+                }
+                if (signature?.signerProviderType !== PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE) {
+                  errors.push("signature.signerProviderType mismatch.");
+                }
+                if (!expectedSignature) {
+                  errors.push(`signature.keyId not found in released signer keyring ($${signatureKeyId || "missing"}).`);
+                } else if (signature?.value !== expectedSignature) {
+                  errors.push("signature mismatch.");
+                }
+        
+                return {
+                  errors,
+                  expectedSignature,
+                };
+              },
+            };
+          }
+        
           if (PROTOTYPE_SIGNER_PROVIDER_TYPE === "phala_kms_stub") {
             return {
               providerId: PROTOTYPE_SIGNER_PROVIDER_ID,
@@ -893,16 +1160,14 @@ services:
               algorithm: "provider-managed",
               keyId: "prototype-phala-kms-stub",
               keySource: "provider_managed",
+              signingMode: "provider_managed",
+              requireExplicitKey: false,
+              requiresAttestation: false,
               getReadiness() {
                 return {
                   ok: false,
                   error: PROTOTYPE_SIGNER_PROVIDER_UNAVAILABLE_REASON,
-                  keyPolicy: {
-                    requireExplicitKey: false,
-                    keySource: this.keySource,
-                    signerProviderId: this.providerId,
-                    signerProviderType: this.providerType,
-                  },
+                  keyPolicy: buildSignerKeyPolicy(this),
                 };
               },
               signDigest() {
@@ -923,16 +1188,14 @@ services:
             algorithm: "provider-managed",
             keyId: "prototype-unsupported-provider",
             keySource: "provider_managed",
+            signingMode: "provider_managed",
+            requireExplicitKey: false,
+            requiresAttestation: false,
             getReadiness() {
               return {
                 ok: false,
                 error: `Unsupported signer provider type: $${PROTOTYPE_SIGNER_PROVIDER_TYPE}.`,
-                keyPolicy: {
-                  requireExplicitKey: false,
-                  keySource: this.keySource,
-                  signerProviderId: this.providerId,
-                  signerProviderType: this.providerType,
-                },
+                keyPolicy: buildSignerKeyPolicy(this),
               };
             },
             signDigest() {
@@ -949,6 +1212,17 @@ services:
         
         const SIGNER_PROVIDER = createSignerProviderRuntime();
         
+        const buildSignerProviderStatus = () => ({
+          providerId: SIGNER_PROVIDER.providerId,
+          providerType: SIGNER_PROVIDER.providerType,
+          signingMode: SIGNER_PROVIDER.signingMode,
+          keySource: SIGNER_PROVIDER.keySource,
+          ...(SIGNER_PROVIDER.keyProviderId ? { keyProviderId: SIGNER_PROVIDER.keyProviderId } : {}),
+          ...(SIGNER_PROVIDER.releasedSignerPolicy
+            ? { releasedSignerPolicy: SIGNER_PROVIDER.releasedSignerPolicy }
+            : {}),
+        });
+        
         const buildPrototypeArb = async (scored, sourceReceipt) => {
           const inputHash = sha256Hex(scored.transformedSnapshot);
           const outputHash = sha256Hex(scored.recommendationSet);
@@ -964,10 +1238,10 @@ services:
           };
         
           const digest = sha256Hex(arbCore);
-          const signature = SIGNER_PROVIDER.signDigest(digest);
-          const attestation = PROTOTYPE_ATTESTATION_INCLUDE
+          const attestation = PROTOTYPE_ATTESTATION_INCLUDE || SIGNER_PROVIDER.requiresAttestation
             ? (await resolvePrototypeRuntimeAttestationEvidence(digest)).arbAttestation
             : null;
+          const signature = SIGNER_PROVIDER.signDigest(digest, { attestation });
           const sourceReceiptHash = sourceReceipt ? sha256Hex(sourceReceipt) : null;
           runtimeState.lastArbDigest = digest;
         
@@ -1418,6 +1692,11 @@ services:
               expectedSignerProviderType: PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE,
               providerRuntimeType: SIGNER_PROVIDER.providerType,
               providerRuntimeId: SIGNER_PROVIDER.providerId,
+              signingMode: SIGNER_PROVIDER.signingMode,
+              keySource: SIGNER_PROVIDER.keySource,
+              ...(SIGNER_PROVIDER.releasedSignerPolicy
+                ? { releasedSignerPolicy: SIGNER_PROVIDER.releasedSignerPolicy }
+                : {}),
             },
             attestationPolicy: attestationPolicy.policy,
             sourceReceiptPolicy: sourceReceiptPolicy.policy,
@@ -1437,10 +1716,7 @@ services:
               phalaReady: true,
               attestationSource: PROTOTYPE_ATTESTATION_SOURCE,
               measurementPolicy: buildRuntimeMeasurementPolicyStatus(),
-              signerProvider: {
-                providerId: SIGNER_PROVIDER.providerId,
-                providerType: SIGNER_PROVIDER.providerType,
-              },
+              signerProvider: buildSignerProviderStatus(),
             });
             return;
           }
@@ -1530,7 +1806,7 @@ services:
                 mode: "deterministic_scoring_prototype",
                 privacyMode: "feature_only",
                 modelVersion: scored.modelVersion,
-                signingMode: "prototype_hmac",
+                signingMode: SIGNER_PROVIDER.signingMode || "prototype_hmac",
                 transformedSnapshot: scored.transformedSnapshot,
                 recommendationSet: scored.recommendationSet,
                 sourceReceipt,

@@ -73,6 +73,7 @@
     "step53:test": "node scripts/test-step53-phala-minimal-cloud-app-verification.mjs",
     "step54:test": "node scripts/test-step54-phala-minimal-real-attestation-source.mjs",
     "step55:test": "node scripts/test-step55-phala-minimal-pinned-runtime-measurement.mjs",
+    "step56:test": "node scripts/test-step56-phala-minimal-released-signer.mjs",
     "test": "tsx scripts/run-regression-tests.ts"
   },
   "eslintConfig": {

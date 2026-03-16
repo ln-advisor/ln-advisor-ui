@@ -62,10 +62,12 @@ Notes:
 - when deploying to an existing CVM, prefer `docker-compose.rendered.yml` so Phala receives the exact runtime values you set locally
 - the server starts via `node --input-type=module -e` to avoid Docker build-context issues during CVM boot
 - set `PROTOTYPE_SIGNER_PROVIDER_TYPE=env_hmac` to use the env-backed HMAC provider
+- set `PROTOTYPE_SIGNER_PROVIDER_TYPE=released_keyring` plus `PROTOTYPE_RELEASED_SIGNER_*` envs to require policy-gated key release before signing
 - set `PROTOTYPE_SIGNER_PROVIDER_TYPE=phala_kms_stub` to exercise the non-implemented provider path
 - set `PROTOTYPE_ARB_SIGNING_KEY` to override the default prototype HMAC key
 - set `PROTOTYPE_ARB_REQUIRE_EXPLICIT_KEY=true` to fail closed unless a non-default signing key is configured
 - set `PROTOTYPE_SIGNER_PROVIDER_ID`, `PROTOTYPE_ARB_VERIFY_ALLOWED_SIGNER_PROVIDER_ID`, and `PROTOTYPE_ARB_VERIFY_EXPECTED_SIGNER_PROVIDER_TYPE` to model signer-provider policy
+- `released_keyring` keeps the HMAC prototype but moves the key behind attestation-gated release policy so the runtime flow matches the main API's released-signer path more closely
 - set `PROTOTYPE_VERIFY_REQUIRE_ATTESTATION=true` plus the `PROTOTYPE_ATTESTATION_*` and `PROTOTYPE_VERIFY_ALLOWED_*` envs to enforce prototype attestation policy
 - set `PROTOTYPE_VERIFY_REQUIRE_SOURCE_RECEIPT=true` to require source receipt binding during verification
 - set `PROTOTYPE_VERIFY_REQUIRE_LIVE_APP_EVIDENCE=true` to require caller-supplied live `/info` and `/attestation` evidence during verification

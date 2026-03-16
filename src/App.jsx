@@ -14,14 +14,19 @@ import DarkModeToggle from './components/DarkModeToggle';
 import NavBar from './components/NavBar';
 import PeersModal from './components/PeersModal';
 import DemoGraphAnalysis from './components/DemoGraphAnalysis';
+import { getMockLightningSnapshot } from './connectors/mockLightningSnapshot';
 
 import GraphAnalysisPage from './pages/GraphAnalysisPage';
 import ChannelsPage from './pages/ChannelsPage';
 import RecommendationsPage from './pages/RecommendationsPage';
 
 function App() {
+  const mockLightningEnabled = String(import.meta.env.VITE_ENABLE_MOCK_LIGHTNING_UI || '').trim().toLowerCase() === 'true';
+  const mockSnapshot = mockLightningEnabled ? getMockLightningSnapshot() : null;
+
   // LNC & Node State
   const [lnc, setLncState] = useState(null);
+  const isMockLightningUi = !lnc && Boolean(mockSnapshot);
   const [isPaired, setIsPaired] = useState(() => {
     try {
       return Boolean(new LNC({ namespace: 'tapvolt' })?.credentials?.isPaired);
@@ -294,6 +299,96 @@ function App() {
   }
 
   if (!lnc) {
+    if (isMockLightningUi) {
+      const mockNodeInfo = mockSnapshot?.nodeInfo || null;
+      const mockChannels = mockSnapshot?.channels || [];
+      const mockPeers = mockSnapshot?.peers || [];
+
+      return (
+        <HashRouter>
+          <div
+            className="min-h-screen relative overflow-hidden transition-colors duration-300"
+            style={{ background: 'var(--bg-gradient)', color: 'var(--text-primary)' }}
+          >
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute -top-40 -left-40 h-96 w-96 rounded-full blur-3xl" style={{ background: 'var(--glow-1)' }} />
+              <div className="absolute top-10 right-[-10%] h-[28rem] w-[28rem] rounded-full blur-3xl" style={{ background: 'var(--glow-2)' }} />
+              <div className="absolute bottom-[-20%] left-[25%] h-80 w-80 rounded-full blur-3xl" style={{ background: 'var(--glow-3)' }} />
+              <div
+                className="absolute inset-0"
+                style={{
+                  backgroundImage: 'var(--bg-grid)',
+                  backgroundSize: '22px 22px',
+                  opacity: darkMode ? 0.35 : 0.55,
+                }}
+              />
+            </div>
+
+            <DarkModeToggle darkMode={darkMode} toggleDarkMode={toggleDarkMode} />
+
+            <div className="relative z-10">
+              <div
+                className="max-w-6xl mx-auto rounded-3xl shadow-xl transition-all duration-300"
+                style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  boxShadow: 'var(--card-shadow)',
+                  border: `1px solid ${darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)'}`,
+                  margin: '20px auto 40px',
+                  backdropFilter: 'blur(12px)',
+                }}
+              >
+                <div
+                  className="px-6 py-3 border-b text-xs font-semibold uppercase tracking-[0.2em]"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    backgroundColor: darkMode ? 'rgba(59,130,246,0.12)' : 'rgba(59,130,246,0.08)',
+                    color: darkMode ? '#93c5fd' : '#1d4ed8',
+                  }}
+                >
+                  Mock Lightning UI Mode
+                </div>
+
+                <AppHeader
+                  nodeInfo={mockNodeInfo}
+                  nodeChannelsCount={mockChannels?.length}
+                  peersCount={mockPeers?.length}
+                  onShowPeers={() => setIsPeersModalOpen(true)}
+                />
+
+                <NavBar darkMode={darkMode} />
+
+                <Routes>
+                  <Route
+                    path="/channels"
+                    element={<ChannelsPage lnc={null} darkMode={darkMode} nodeChannels={mockChannels} mockSnapshot={mockSnapshot} />}
+                  />
+                  <Route path="/graph" element={<Navigate to="/channels" replace />} />
+                  <Route path="/recommendations" element={<Navigate to="/channels" replace />} />
+                  <Route path="*" element={<Navigate to="/channels" replace />} />
+                </Routes>
+
+                <PeersModal
+                  isOpen={isPeersModalOpen}
+                  onClose={() => setIsPeersModalOpen(false)}
+                  peers={mockPeers}
+                  darkMode={darkMode}
+                  lnc={null}
+                  onPeerAdded={null}
+                />
+
+                <footer
+                  className="px-6 py-4 border-t text-center text-xs"
+                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+                >
+                  <p>LN Advisor Console</p>
+                </footer>
+              </div>
+            </div>
+          </div>
+        </HashRouter>
+      );
+    }
+
     if (showDemo) {
       return (
         <DemoGraphAnalysis
