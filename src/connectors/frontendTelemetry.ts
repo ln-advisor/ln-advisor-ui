@@ -5,6 +5,8 @@ import type {
   LightningChannel,
   LightningFeePolicy,
   LightningForwardingEvent,
+  LightningGraphEdge,
+  LightningGraphNode,
   LightningMissionControlPair,
   LightningNodeCentralityMetric,
   LightningNodeInfo,
@@ -293,8 +295,17 @@ export function telemetryToLightningSnapshot(
   const namespace = String(telemetry.namespace || "").trim() || "tapvolt";
   const nodeInfo = telemetry.nodeInfo ? normalizeNodeInfo(telemetry.nodeInfo) : null;
 
+  const metadata = toRecord(telemetry.metadata);
+  const networkInAvg = readNumberLike(pick(metadata, "networkInAvg"));
+  const networkOutAvg = readNumberLike(pick(metadata, "networkOutAvg"));
+
   const channels = [...(Array.isArray(telemetry.channels) ? telemetry.channels : [])]
-    .map(normalizeChannel)
+    .map((raw) => {
+      const ch = normalizeChannel(raw);
+      if (networkInAvg !== undefined) ch.networkInAvg = Number(networkInAvg);
+      if (networkOutAvg !== undefined) ch.networkOutAvg = Number(networkOutAvg);
+      return ch;
+    })
     .sort((a, b) => compareText(a.chanId || "", b.chanId || ""));
 
   const forwardingHistory = [...(Array.isArray(telemetry.forwardingHistory) ? telemetry.forwardingHistory : [])]
@@ -349,6 +360,29 @@ export function telemetryToLightningSnapshot(
     .map(normalizePeer)
     .sort((a, b) => compareText(a.pubKey || "", b.pubKey || ""));
 
+  const graphNodes: LightningGraphNode[] = Array.isArray(pick(graphSnapshot || {}, "nodes"))
+    ? (pick(graphSnapshot || {}, "nodes") as unknown[]).map((n) => {
+        const r = toRecord(n);
+        return {
+          ...r,
+          pubKey: readString(pick(r, "pubKey", "pub_key")),
+          alias: readString(pick(r, "alias")),
+        };
+      })
+    : [];
+
+  const graphEdges: LightningGraphEdge[] = Array.isArray(pick(graphSnapshot || {}, "edges"))
+    ? (pick(graphSnapshot || {}, "edges") as unknown[]).map((e) => {
+        const r = toRecord(e);
+        return {
+          ...r,
+          channelId: readString(pick(r, "channel_id", "channelId")),
+          node1Pub: readString(pick(r, "node1_pub", "node1Pub")),
+          node2Pub: readString(pick(r, "node2_pub", "node2Pub")),
+        };
+      })
+    : [];
+
   return {
     schemaVersion: "lightning-snapshot-v1",
     sourceType: "lnc_frontend_extractor",
@@ -362,6 +396,8 @@ export function telemetryToLightningSnapshot(
     missionControlPairs,
     nodeCentralityMetrics,
     peers,
+    graphNodes,
+    graphEdges,
     graphSnapshotRef: buildGraphSnapshotRef(graphSnapshot, collectedAt),
   };
 }

@@ -28,7 +28,8 @@ export interface LightningChannel {
   totalSatoshisSent?: NumericLike;
   totalSatoshisReceived?: NumericLike;
   numUpdates?: NumericLike;
-  // TODO(step-1): Add normalized commitment-policy fields if they are needed by scoring.
+  networkInAvg?: number;
+  networkOutAvg?: number;
   [key: string]: unknown;
 }
 
@@ -111,6 +112,21 @@ export interface GraphSnapshotReference {
   [key: string]: unknown;
 }
 
+export interface LightningGraphNode {
+  pubKey: string;
+  alias: string;
+  lastUpdate?: number;
+  [key: string]: unknown;
+}
+
+export interface LightningGraphEdge {
+  channelId: string;
+  node1Pub: string;
+  node2Pub: string;
+  capacity?: NumericLike;
+  [key: string]: unknown;
+}
+
 export interface LightningSnapshot {
   schemaVersion: "lightning-snapshot-v1";
   sourceType: SnapshotSourceType;
@@ -124,6 +140,8 @@ export interface LightningSnapshot {
   missionControlPairs?: LightningMissionControlPair[];
   nodeCentralityMetrics?: LightningNodeCentralityMetric[];
   peers?: LightningPeer[];
+  graphNodes?: LightningGraphNode[];
+  graphEdges?: LightningGraphEdge[];
   graphSnapshotRef: GraphSnapshotReference | null;
 }
 
@@ -159,4 +177,5 @@ export interface FrontendTelemetryEnvelope {
   graphSnapshot?: FrontendGraphSnapshot | null;
   missionControl?: FrontendMissionControlSnapshot | null;
   nodeMetrics?: FrontendNodeMetricsSnapshot | null;
+  metadata?: unknown;
 }

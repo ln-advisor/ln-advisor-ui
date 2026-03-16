@@ -24,6 +24,10 @@ export interface FeeRecommendationV1 {
     forwardCount: number;
     missionReliabilityBand: LevelBand;
     centralityBand: LevelBand;
+    revenueBand: LevelBand;
+    marketOutlier: "OVERPRICED" | "UNDERPRICED" | "NEUTRAL";
+    peerSymmetry: "SYMMETRIC" | "ASYMMETRIC";
+    forwardingEarningPpm: number | null;
   };
   reasons: string[];
 }
@@ -44,6 +48,19 @@ export interface ForwardOpportunityV1 {
   };
 }
 
+export interface ChannelOpeningRecommendationV1 {
+  peerRef: string;
+  score: number;
+  confidence: number;
+  signals: {
+    centralityBand: LevelBand;
+    reliabilityBand: LevelBand;
+    capacityBand: LevelBand;
+    channelCount: number;
+  };
+  reasons: string[];
+}
+
 export interface RecommendationSetV1 {
   schemaVersion: "recommendation-set-v1";
   modelVersion: "fee-forward-v1";
@@ -53,6 +70,7 @@ export interface RecommendationSetV1 {
   collectedAt: string;
   feeRecommendations: FeeRecommendationV1[];
   forwardOpportunityRanking: ForwardOpportunityV1[];
+  channelOpeningRecommendations: ChannelOpeningRecommendationV1[];
 }
 
 export interface ScoreNodeStateOptions {
@@ -105,6 +123,25 @@ const buildCentralityThresholds = (
     p33: percentile(centralityValues, 1 / 3),
     p66: percentile(centralityValues, 2 / 3),
   };
+};
+
+const buildRevenueThresholds = (
+  channels: FeatureOnlyNodeState["channels"]
+): { p33: number; p66: number } => {
+  const revenueValues = channels
+    .map((channel) => channel.revenueSat)
+    .filter((rev): rev is number => rev !== null)
+    .sort((a, b) => a - b);
+  return {
+    p33: percentile(revenueValues, 1 / 3),
+    p66: percentile(revenueValues, 2 / 3),
+  };
+};
+
+const classifyRevenueBand = (revenueSat: number, thresholds: { p33: number; p66: number }): LevelBand => {
+  if (revenueSat <= thresholds.p33) return "LOW";
+  if (revenueSat <= thresholds.p66) return "MEDIUM";
+  return "HIGH";
 };
 
 const classifyFeeBand = (feePpm: number | null, thresholds: { p33: number; p66: number }): LevelBand | "UNKNOWN" => {
@@ -214,7 +251,8 @@ const buildFeeRecommendation = (
   channel: FeatureOnlyNodeState["channels"][number],
   maxActivityTs: number | null,
   feeThresholds: { p33: number; p66: number },
-  centralityThresholds: { p33: number; p66: number }
+  centralityThresholds: { p33: number; p66: number },
+  revenueThresholds: { p33: number; p66: number }
 ): FeeRecommendationV1 => {
   const reasons = new Set<string>();
   const recentActivity = classifyRecentActivity(channel.lastActivityTimestamp, maxActivityTs);
@@ -229,6 +267,7 @@ const buildFeeRecommendation = (
     channel.peerBetweennessCentrality,
     centralityThresholds
   );
+  const revenueBand = classifyRevenueBand(channel.revenueSat, revenueThresholds);
 
   let raiseScore = 0;
   let lowerScore = 0;
@@ -278,6 +317,58 @@ const buildFeeRecommendation = (
     lowerScore += 1;
     reasons.add("peer_centrality_low");
   }
+  
+  // Market Awareness & Peer Symmetry
+  const peerInPpm = channel.inboundFeePpm ?? 0;
+  const ourOutPpm = channel.outboundFeePpm ?? 0;
+  let marketOutlier: "OVERPRICED" | "UNDERPRICED" | "NEUTRAL" = "NEUTRAL";
+  let peerSymmetry: "SYMMETRIC" | "ASYMMETRIC" = "SYMMETRIC";
+
+  if (ourOutPpm > peerInPpm + 500) {
+    peerSymmetry = "ASYMMETRIC";
+    reasons.add("peer_fee_asymmetry_high");
+    raiseScore = 0; // Don't raise if already much higher than peer
+    lowerScore += 1;
+  }
+
+  if (channel.networkOutAvg !== null) {
+    const marketAvg = channel.networkOutAvg;
+    if (ourOutPpm > marketAvg * 1.5 && ourOutPpm > 100) {
+      marketOutlier = "OVERPRICED";
+      reasons.add("market_price_over");
+      lowerScore += 1;
+    } else if (ourOutPpm < marketAvg * 0.5) {
+      marketOutlier = "UNDERPRICED";
+      reasons.add("market_price_under");
+      raiseScore += 1;
+    }
+  }
+
+  // Proven Clearing Price
+  if (channel.forwardingEarningPpm !== null && channel.forwardCountOut > 0) {
+    const earningPpm = channel.forwardingEarningPpm;
+    if (earningPpm > ourOutPpm * 1.5) {
+      raiseScore += 2;
+      reasons.add("historical_clearing_price_high");
+    } else if (earningPpm < ourOutPpm * 0.5) {
+      lowerScore += 2;
+      reasons.add("historical_clearing_price_low");
+    }
+  }
+
+  // Performance & Revenue Awareness
+  if (revenueBand === "HIGH") {
+    if (liquidityImbalance === "BALANCED") {
+      // Protect high earning balanced channels from unnecessary fee changes
+      raiseScore = 0;
+      lowerScore = 0;
+      reasons.add("high_yield_efficiency");
+    } else if (liquidityImbalance === "REMOTE_HEAVY") {
+      // Aggressively raise fees if high revenue channel is becoming scarce
+      raiseScore += 2;
+      reasons.add("high_yield_demand");
+    }
+  }
 
   let action: FeeAction = "hold";
   if (channel.active) {
@@ -303,6 +394,10 @@ const buildFeeRecommendation = (
       forwardCount: channel.forwardCountTotal,
       missionReliabilityBand,
       centralityBand,
+      revenueBand,
+      marketOutlier,
+      peerSymmetry,
+      forwardingEarningPpm: channel.forwardingEarningPpm,
     },
     reasons: [...reasons].sort(compareText),
   };
@@ -394,6 +489,47 @@ const buildForwardOpportunity = (
   };
 };
 
+const buildChannelOpeningRecommendation = (
+  potential: FeatureOnlyNodeState["potentialPeers"][number],
+  centralityThresholds: { p33: number; p66: number }
+): ChannelOpeningRecommendationV1 => {
+  const reasons: string[] = [];
+  const centralityBand = classifyCentralityBand(potential.betweennessCentrality, centralityThresholds);
+  const reliabilityBand = classifyMissionReliabilityBand(potential.missionSuccessRate, potential.missionFailureRate);
+  
+  // Capacity Band: LOW < 1M, MEDIUM < 10M, HIGH >= 10M
+  let capacityBand: LevelBand = "LOW";
+  if (potential.capacitySat > 10_000_000) capacityBand = "HIGH";
+  else if (potential.capacitySat > 1_000_000) capacityBand = "MEDIUM";
+
+  // Score = BC / (Capacity + 1) * Reliability_Weight
+  const bc = potential.betweennessCentrality ?? 0;
+  const cap = Math.max(1, potential.capacitySat / 100_000_000); // normalize capacity to BTC units for better scaling
+  const relWeight = reliabilityBand === "HIGH" ? 1.5 : reliabilityBand === "LOW" ? 0.5 : 1.0;
+  
+  const rawScore = (bc / cap) * relWeight;
+  const totalScore = roundFixed(rawScore * 1000, 3);
+
+  if (centralityBand === "HIGH") reasons.push("high_network_centrality");
+  if (reliabilityBand === "HIGH") reasons.push("proven_routing_reliability");
+  if (capacityBand === "LOW" && potential.channelCount > 5) reasons.push("altruistic_liquidity_gap");
+  if (potential.channelCount > 50) reasons.push("well_connected_hub");
+  const confidence = Math.min(100, (totalScore / 100) * 100);
+
+  return {
+    peerRef: potential.peerRef,
+    score: totalScore,
+    confidence: roundFixed(Math.min(1, rawScore * 2), 3),
+    signals: {
+      centralityBand,
+      reliabilityBand,
+      capacityBand,
+      channelCount: potential.channelCount,
+    },
+    reasons: reasons.sort(compareText),
+  };
+};
+
 export function scoreNodeState(
   nodeState: ScoringInput,
   options?: ScoreNodeStateOptions
@@ -408,11 +544,12 @@ export function scoreNodeState(
     }, null) ?? null;
   const feeThresholds = buildFeeBandThresholds(sortedChannels);
   const centralityThresholds = buildCentralityThresholds(sortedChannels);
+  const revenueThresholds = buildRevenueThresholds(sortedChannels);
   const peerMap = buildPeerMap(featureOnly.peers);
 
   const feeRecommendations = sortedChannels
     .map((channel) =>
-      buildFeeRecommendation(channel, maxActivityTs, feeThresholds, centralityThresholds)
+      buildFeeRecommendation(channel, maxActivityTs, feeThresholds, centralityThresholds, revenueThresholds)
     )
     .sort((a, b) => compareText(a.channelRef, b.channelRef));
 
@@ -429,6 +566,11 @@ export function scoreNodeState(
     ...row,
   }));
 
+  const channelOpeningRecommendations = (featureOnly.potentialPeers || [])
+    .map((p) => buildChannelOpeningRecommendation(p, centralityThresholds))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+
   return {
     schemaVersion: "recommendation-set-v1",
     modelVersion: "fee-forward-v1",
@@ -438,5 +580,6 @@ export function scoreNodeState(
     collectedAt: String(options?.collectedAt ?? metadata.collectedAt ?? ""),
     feeRecommendations,
     forwardOpportunityRanking,
+    channelOpeningRecommendations,
   };
 }

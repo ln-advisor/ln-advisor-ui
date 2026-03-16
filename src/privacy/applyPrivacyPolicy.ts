@@ -32,6 +32,7 @@ export interface FeatureOnlyNodeState {
     forwardCountOut: number;
     forwardCountTotal: number;
     revenueSat: number;
+    forwardingEarningPpm: number | null;
     failedForwardCount: number;
     lastActivityTimestamp: number | null;
     peerBetweennessCentrality: number | null;
@@ -39,6 +40,8 @@ export interface FeatureOnlyNodeState {
     missionFailureRate: number | null;
     missionLastSuccessTimestamp: number | null;
     missionLastFailTimestamp: number | null;
+    networkInAvg: number | null;
+    networkOutAvg: number | null;
   }>;
   peers: Array<{
     peerRef: string;
@@ -57,6 +60,15 @@ export interface FeatureOnlyNodeState {
     missionFailureRate: number | null;
     missionLastSuccessTimestamp: number | null;
     missionLastFailTimestamp: number | null;
+  }>;
+  potentialPeers: Array<{
+    peerRef: string;
+    capacitySat: number;
+    channelCount: number;
+    betweennessCentrality: number | null;
+    missionSuccessRate: number | null;
+    missionFailureRate: number | null;
+    lastActivityTimestamp: number | null;
   }>;
   totals: {
     forwardCount: number;
@@ -96,6 +108,10 @@ export interface BandedNodeState {
     feeCompetitivenessBand: PrivacyBand;
     failedForwardPressure: "LOW" | "HIGH";
     missionReliabilityBand: PrivacyBand;
+    centralityBand: PrivacyBand;
+  }>;
+  potentialPeers: Array<{
+    peerRef: string;
     centralityBand: PrivacyBand;
   }>;
   totals: {
@@ -242,6 +258,7 @@ const toFeatureOnly = (normalized: NormalizedNodeState): FeatureOnlyNodeState =>
       forwardCountOut: channel.forwardCountOut,
       forwardCountTotal: channel.forwardCountTotal,
       revenueSat: channel.revenueSat,
+      forwardingEarningPpm: channel.forwardingEarningPpm,
       failedForwardCount: channel.failedForwardCount,
       lastActivityTimestamp: channel.lastActivityTimestamp,
       peerBetweennessCentrality: channel.peerBetweennessCentrality,
@@ -249,6 +266,8 @@ const toFeatureOnly = (normalized: NormalizedNodeState): FeatureOnlyNodeState =>
       missionFailureRate: channel.missionFailureRate,
       missionLastSuccessTimestamp: channel.missionLastSuccessTimestamp,
       missionLastFailTimestamp: channel.missionLastFailTimestamp,
+      networkInAvg: channel.networkInAvg,
+      networkOutAvg: channel.networkOutAvg,
     }));
 
   const peers = [...normalized.peers]
@@ -280,10 +299,21 @@ const toFeatureOnly = (normalized: NormalizedNodeState): FeatureOnlyNodeState =>
     schemaVersion: "privacy-node-state-v1",
     privacyMode: "feature_only",
     sourceSchemaVersion: "normalized-node-state-v1",
-    nodeAlias: normalized.nodeAlias,
+    nodeAlias: "my-node-alias",
     channelCount: normalized.channelCount,
     channels,
     peers,
+    potentialPeers: [...normalized.potentialPeers]
+       .sort((a, b) => compareText(a.pubkey, b.pubkey))
+       .map((p, i) => ({
+      peerRef: makeRef("peer", peers.length + i),
+      capacitySat: p.capacitySat,
+      channelCount: p.channelCount,
+      betweennessCentrality: p.betweennessCentrality,
+      missionSuccessRate: p.missionSuccessRate,
+      missionFailureRate: p.missionFailureRate,
+      lastActivityTimestamp: p.lastActivityTimestamp,
+    })),
     totals: {
       forwardCount: normalized.totals.forwardCount,
       revenueSat: normalized.totals.revenueSat,
@@ -368,10 +398,16 @@ const toBanded = (normalized: NormalizedNodeState): BandedNodeState => {
     schemaVersion: "privacy-node-state-v1",
     privacyMode: "banded",
     sourceSchemaVersion: "normalized-node-state-v1",
-    nodeAlias: normalized.nodeAlias,
+    nodeAlias: "my-node-alias",
     channelCount: normalized.channelCount,
     channels,
     peers,
+    potentialPeers: [...normalized.potentialPeers]
+      .sort((a, b) => compareText(a.pubkey, b.pubkey))
+      .map((p, i) => ({
+        peerRef: makeRef("peer", peers.length + i),
+        centralityBand: classifyCentralityBand(p.betweennessCentrality, centralityThresholds),
+      })),
     totals: {
       channelsByLiquidityBand,
       channelsByPerformanceBand,

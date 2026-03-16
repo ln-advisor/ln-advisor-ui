@@ -3,12 +3,14 @@ import type {
   NormalizedChannelState,
   NormalizedNodeState,
   NormalizedPeerAggregate,
+  NormalizedPotentialPeer,
 } from "./types";
 
 interface ChannelAccumulator {
   forwardCountIn: number;
   forwardCountOut: number;
   revenueSat: number;
+  volumeOutSat: number;
   failedForwardCount: number;
   lastActivityTimestamp: number | null;
 }
@@ -68,6 +70,7 @@ const ensureChannelAccumulator = (
       forwardCountIn: 0,
       forwardCountOut: 0,
       revenueSat: 0,
+      volumeOutSat: 0,
       failedForwardCount: 0,
       lastActivityTimestamp: null,
     });
@@ -94,6 +97,7 @@ const buildForwardingStats = (snapshot: LightningSnapshot): Map<string, ChannelA
       const accOut = ensureChannelAccumulator(channelStats, channelOut);
       accOut.forwardCountOut += 1;
       accOut.revenueSat += feeSat;
+      accOut.volumeOutSat += toNumber(event.amtOut);
       accOut.lastActivityTimestamp = updateActivity(accOut.lastActivityTimestamp, ts);
     }
   }
@@ -230,6 +234,7 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         forwardCountIn: 0,
         forwardCountOut: 0,
         revenueSat: 0,
+        volumeOutSat: 0,
         failedForwardCount: 0,
         lastActivityTimestamp: null,
       };
@@ -259,6 +264,7 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         forwardCountOut: stats.forwardCountOut,
         forwardCountTotal: stats.forwardCountIn + stats.forwardCountOut,
         revenueSat: roundFixed(stats.revenueSat, 3),
+        forwardingEarningPpm: stats.volumeOutSat > 0 ? Math.round((stats.revenueSat / stats.volumeOutSat) * 1_000_000) : null,
         failedForwardCount: stats.failedForwardCount,
         lastActivityTimestamp: stats.lastActivityTimestamp,
         peerBetweennessCentrality:
@@ -269,9 +275,68 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
           missionTotal > 0 ? roundFixed(mission.failCount / missionTotal, 6) : null,
         missionLastSuccessTimestamp: mission.lastSuccessTimestamp,
         missionLastFailTimestamp: mission.lastFailTimestamp,
+        networkInAvg: (channel as any).networkInAvg ?? null,
+        networkOutAvg: (channel as any).networkOutAvg ?? null,
       };
     })
     .sort((a, b) => compareText(a.channelId, b.channelId));
+
+  const peerPubkeyEntries = new Set(channels.map((c) => normalizePubkey(c.remotePubkey)));
+  const selfPubkeyFull = normalizePubkey(nodePubkey);
+
+  const graphNodeMap = new Map<string, { alias: string; capacitySat: number; channelCount: number; lastUpdate: number | null }>();
+  for (const edge of snapshot.graphEdges || []) {
+    const c = toNumber(edge.capacity);
+    const n1 = normalizePubkey(edge.node1Pub);
+    const n2 = normalizePubkey(edge.node2Pub);
+    
+    if (!graphNodeMap.has(n1)) graphNodeMap.set(n1, { alias: "", capacitySat: 0, channelCount: 0, lastUpdate: null });
+    const acc1 = graphNodeMap.get(n1)!;
+    acc1.capacitySat += c;
+    acc1.channelCount += 1;
+
+    if (!graphNodeMap.has(n2)) graphNodeMap.set(n2, { alias: "", capacitySat: 0, channelCount: 0, lastUpdate: null });
+    const acc2 = graphNodeMap.get(n2)!;
+    acc2.capacitySat += c;
+    acc2.channelCount += 1;
+  }
+
+  for (const node of snapshot.graphNodes || []) {
+    const p = normalizePubkey(node.pubKey);
+    if (graphNodeMap.has(p)) {
+      const acc = graphNodeMap.get(p)!;
+      acc.alias = node.alias;
+      acc.lastUpdate = toNumber(node.lastUpdate);
+    } else {
+      graphNodeMap.set(p, {
+        alias: node.alias,
+        capacitySat: 0,
+        channelCount: 0,
+        lastUpdate: toNumber(node.lastUpdate),
+      });
+    }
+  }
+
+  const potentialPeers: NormalizedPotentialPeer[] = [];
+  for (const [p, acc] of graphNodeMap.entries()) {
+    if (p === selfPubkeyFull || peerPubkeyEntries.has(p)) continue;
+    
+    const bc = centralityMap.get(p) ?? null;
+    const mission = missionMap.get(p);
+    const missionTotal = mission ? mission.successCount + mission.failCount : 0;
+
+    potentialPeers.push({
+      pubkey: p,
+      alias: acc.alias,
+      capacitySat: acc.capacitySat,
+      channelCount: acc.channelCount,
+      betweennessCentrality: bc === null ? null : roundFixed(bc, 9),
+      missionSuccessRate: missionTotal > 0 ? roundFixed(mission!.successCount / missionTotal, 6) : null,
+      missionFailureRate: missionTotal > 0 ? roundFixed(mission!.failCount / missionTotal, 6) : null,
+      lastActivityTimestamp: acc.lastUpdate,
+    });
+  }
+  potentialPeers.sort((a, b) => (b.betweennessCentrality ?? 0) - (a.betweennessCentrality ?? 0));
 
   const peerMap = new Map<
     string,
@@ -435,6 +500,7 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
     channelCount: channels.length,
     channels,
     peers,
+    potentialPeers,
     totals: {
       ...totals,
       revenueSat: roundFixed(totals.revenueSat, 3),

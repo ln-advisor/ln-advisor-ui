@@ -4,6 +4,8 @@ import type {
   LightningChannel,
   LightningFeePolicy,
   LightningForwardingEvent,
+  LightningGraphEdge,
+  LightningGraphNode,
   LightningNodeInfo,
   LightningPeer,
   LightningRoutingFailure,

@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
+import { GoogleGenAI } from "@google/genai";
 import { telemetryToLightningSnapshot } from "../connectors/frontendTelemetry";
 import { getLightningSnapshot } from "../connectors/lightningSnapshot";
 import { getMockLightningSnapshot } from "../connectors/mockLightningSnapshot";
@@ -41,6 +43,31 @@ import type { VerifyPhalaAttestationBySourceResult } from "../tee/phala";
 
 type SnapshotMode = "lnc" | "mock" | "frontend_payload";
 
+// Builds a minimal but structurally valid SourceProvenanceReceipt for PROPS-only
+// routes where we never see raw telemetry. We hash the already-privacy-filtered
+// payload and use that as privacyTransformedSnapshotHash, which is all buildArb needs.
+const buildPropsProvenance = (propsPayload: unknown, collectedAt: string): SourceProvenanceReceipt => {
+  const canonical = JSON.stringify(propsPayload);
+  const payloadHash = createHash("sha256").update(canonical).digest("hex");
+  return {
+    schemaVersion: "source-provenance-receipt-v1",
+    sourceType: "lnc_frontend_extractor",
+    snapshotTimestamp: collectedAt,
+    nodeIdentifier: "props-shielded",
+    rawSnapshotHash: payloadHash,           // no raw snapshot; use props hash as placeholder
+    normalizedSnapshotHash: payloadHash,    // same — props payload is the only data we have
+    privacyTransformedSnapshotHash: payloadHash, // this is what buildArb uses as inputHash
+    graphSnapshotRef: null,
+    executionContext: {
+      schemaVersion: "source-execution-context-v1",
+      executionMode: "host_local",
+      enclaveProviderId: null,
+      attestationHash: null,
+    },
+  };
+};
+
+
 interface SnapshotResponse {
   ok: true;
   mode: SnapshotMode;
@@ -75,7 +102,12 @@ export interface ApiServerOptions {
 }
 
 const DEFAULT_DEV_SIGNING_KEY = "arb-dev-signing-key-insecure";
-const API_JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
+const API_HEADERS = {
+  "content-type": "application/json; charset=utf-8",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
 const DEFAULT_RELEASED_SIGNER_ENCLAVE_PROVIDER = "verified_tee";
 const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -275,7 +307,7 @@ const parseBody = async (req: http.IncomingMessage): Promise<Record<string, unkn
 };
 
 const sendJson = (res: http.ServerResponse, statusCode: number, payload: unknown): void => {
-  res.writeHead(statusCode, API_JSON_HEADERS);
+  res.writeHead(statusCode, API_HEADERS);
   res.end(JSON.stringify(sortObjectKeysDeep(payload), null, 2));
 };
 
@@ -292,7 +324,7 @@ const readFrontendTelemetry = (value: unknown): FrontendTelemetryEnvelope | null
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const typed = value as Record<string, unknown>;
   if (typed.schemaVersion !== "frontend-telemetry-envelope-v1") return null;
-  return typed as FrontendTelemetryEnvelope;
+  return typed as unknown as FrontendTelemetryEnvelope;
 };
 
 const toPrivacyMode = (value: unknown): PrivacyMode => {
@@ -519,7 +551,7 @@ const buildRecommendationBundle = async (
   const privacyTransformedNodeState =
     privacyMode === "feature_only"
       ? featureOnlyModelInput
-      : applyPrivacyPolicy(snapshotBundle.normalizedSnapshot, privacyMode);
+      : applyPrivacyPolicy(snapshotBundle.normalizedSnapshot, privacyMode as any);
   const recommendation = scoreNodeState(featureOnlyModelInput, {
     nodePubkey: snapshotBundle.normalizedSnapshot.nodePubkey,
     nodeAlias: snapshotBundle.normalizedSnapshot.nodeAlias,
@@ -579,6 +611,12 @@ const buildRecommendationBundle = async (
 export function createApiServer(options: ApiServerOptions = {}): http.Server {
   return http.createServer(async (req, res) => {
     try {
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, API_HEADERS);
+        res.end();
+        return;
+      }
+
       if (req.method !== "POST") {
         sendJson(res, 405, { ok: false, error: "Only POST is supported." });
         return;
@@ -611,6 +649,119 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
         return;
       }
 
+      // ─────────────────────────────────────────────────────────────────────
+      // POST /api/recommend/channel-openings
+      //
+      // Receives a PROPS feature_only payload (already privacy-filtered by the
+      // client's applyPrivacyPolicy step). Runs the scoring model directly on
+      // the PROPS state and returns channelOpeningRecommendations.
+      //
+      // Expected body: { propsPayload: FeatureOnlyNodeState, privacyMode?, issuedAt? }
+      // ─────────────────────────────────────────────────────────────────────
+      if (url.pathname === "/api/recommend/channel-openings") {
+        const propsPayload = body.propsPayload as import("../privacy/applyPrivacyPolicy").FeatureOnlyNodeState | undefined;
+        const issuedAt = typeof body.issuedAt === "string" ? body.issuedAt : undefined;
+
+        if (!propsPayload || typeof propsPayload !== "object") {
+          sendJson(res, 400, { ok: false, error: "Provide a propsPayload (PROPS feature_only node state)." });
+          return;
+        }
+
+        const collectedAt = new Date().toISOString();
+        const recommendation = scoreNodeState(propsPayload as any, {
+          nodePubkey: "props-shielded",
+          nodeAlias: (propsPayload as any).nodeAlias || "my-node-alias",
+          collectedAt,
+        });
+
+        const arb = buildArb({
+          recommendation,
+          sourceProvenance: buildPropsProvenance(propsPayload, collectedAt),
+          privacyPolicyId: "feature_only",
+          devSigningKey: process.env.ARB_DEV_SIGNING_KEY?.trim() || DEFAULT_DEV_SIGNING_KEY,
+          issuedAt: issuedAt || process.env.ARB_ISSUED_AT?.trim() || collectedAt,
+        });
+
+        const recommendationPath = path.resolve(process.cwd(), "artifacts", "channel-openings.recommendations.json");
+        const arbPath = path.resolve(process.cwd(), "artifacts", "channel-openings.arb.json");
+        await writeJsonDeterministic(recommendationPath, recommendation);
+        await writeJsonDeterministic(arbPath, arb);
+
+        sendJson(res, 200, {
+          ok: true,
+          route: "channel-openings",
+          privacyMode: "feature_only",
+          recommendationPath,
+          arbPath,
+          recommendation,
+          arb,
+        });
+        return;
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
+      // POST /api/recommend/fee-suggestions
+      //
+      // Receives a PROPS feature_only payload scoped to a single channel
+      // (already privacy-filtered by the client's applyPrivacyPolicy step).
+      // Optionally includes peerFeeContext with network average fee data.
+      // Runs the scoring model and returns feeRecommendations.
+      //
+      // Expected body: {
+      //   propsPayload: FeatureOnlyNodeState,  // scoped to 1 channel
+      //   peerFeeContext?: { networkInAvgPpm, networkOutAvgPpm },
+      //   privacyMode?, issuedAt?
+      // }
+      // ─────────────────────────────────────────────────────────────────────
+      if (url.pathname === "/api/recommend/fee-suggestions") {
+        const propsPayload = body.propsPayload as import("../privacy/applyPrivacyPolicy").FeatureOnlyNodeState | undefined;
+        const peerFeeContext = body.peerFeeContext as { networkInAvgPpm?: number | null; networkOutAvgPpm?: number | null } | undefined;
+        const issuedAt = typeof body.issuedAt === "string" ? body.issuedAt : undefined;
+
+        if (!propsPayload || typeof propsPayload !== "object") {
+          sendJson(res, 400, { ok: false, error: "Provide a propsPayload (PROPS feature_only node state for the channel)." });
+          return;
+        }
+
+        // Merge peer fee context into the props payload as metadata so scoreNodeState
+        // can use it for fee comparison, without exposing raw network data.
+        const payloadWithContext = {
+          ...propsPayload,
+          ...(peerFeeContext ? { peerFeeContext } : {}),
+        };
+
+        const collectedAt = new Date().toISOString();
+        const recommendation = scoreNodeState(payloadWithContext as any, {
+          nodePubkey: "props-shielded",
+          nodeAlias: (propsPayload as any).nodeAlias || "my-node-alias",
+          collectedAt,
+        });
+
+        const arb = buildArb({
+          recommendation,
+          sourceProvenance: buildPropsProvenance(propsPayload, collectedAt),
+          privacyPolicyId: "feature_only",
+          devSigningKey: process.env.ARB_DEV_SIGNING_KEY?.trim() || DEFAULT_DEV_SIGNING_KEY,
+          issuedAt: issuedAt || process.env.ARB_ISSUED_AT?.trim() || collectedAt,
+        });
+
+        const recommendationPath = path.resolve(process.cwd(), "artifacts", "fee-suggestions.recommendations.json");
+        const arbPath = path.resolve(process.cwd(), "artifacts", "fee-suggestions.arb.json");
+        await writeJsonDeterministic(recommendationPath, recommendation);
+        await writeJsonDeterministic(arbPath, arb);
+
+        sendJson(res, 200, {
+          ok: true,
+          route: "fee-suggestions",
+          privacyMode: "feature_only",
+          recommendationPath,
+          arbPath,
+          recommendation,
+          arb,
+        });
+        return;
+      }
+
       if (url.pathname === "/api/verify") {
         const arb = body.arb as ArbBundle | undefined;
         const provenance = body.sourceProvenance as SourceProvenanceReceipt | undefined;
@@ -628,8 +779,8 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
           ? arb
           : arbPathValue
             ? (JSON.parse(
-                await readFile(path.resolve(process.cwd(), ensureRelativeArtifactPath(arbPathValue)), "utf8")
-              ) as ArbBundle)
+              await readFile(path.resolve(process.cwd(), ensureRelativeArtifactPath(arbPathValue)), "utf8")
+            ) as ArbBundle)
             : null;
         if (!loadedArb) {
           sendJson(res, 400, { ok: false, error: "Provide arb object or arbPath." });
@@ -640,11 +791,11 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
           ? provenance
           : provenancePathValue
             ? (JSON.parse(
-                await readFile(
-                  path.resolve(process.cwd(), ensureRelativeArtifactPath(provenancePathValue)),
-                  "utf8"
-                )
-              ) as SourceProvenanceReceipt)
+              await readFile(
+                path.resolve(process.cwd(), ensureRelativeArtifactPath(provenancePathValue)),
+                "utf8"
+              )
+            ) as SourceProvenanceReceipt)
             : undefined;
 
         const profileDefaults = resolveVerifyPolicyProfile(body.trustPolicyProfile, loadedArb);
@@ -674,6 +825,51 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
               });
 
         sendJson(res, 200, verifyResult);
+        return;
+      }
+
+      if (url.pathname === "/api/analyze-gemini") {
+        const telemetry = body.telemetry;
+        const recommendation = body.recommendation;
+
+        if (!telemetry || !recommendation) {
+          sendJson(res, 400, { ok: false, error: "Provide telemetry and recommendation objects." });
+          return;
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          sendJson(res, 500, { ok: false, error: "GEMINI_API_KEY environment variable is not set." });
+          return;
+        }
+
+        const ai = new GoogleGenAI({ apiKey });
+        console.log(telemetry);
+        console.log(recommendation);
+        try {
+          const result = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: `
+              You are a Lightning Network expert advisor.
+              Given the following telemetry data for a channel and the suggested fee recommendation,
+              evaluate if the recommendation makes sense.
+
+              Telemetry:
+              ${JSON.stringify(telemetry, null, 2)}
+
+              Recommendation:
+              ${JSON.stringify(recommendation, null, 2)}
+
+              Provide a brief analysis (max 3 sentences) explaining why you agree or disagree with the recommendation.
+              Focus on liquidity imbalance, recent forward volume, peer fee competitiveness, and the historical successfully routed fee rate (forwardingEarningPpm).
+            `
+          });
+
+          sendJson(res, 200, { ok: true, analysis: result.text });
+        } catch (err) {
+          console.error("Gemini analysis failed:", err);
+          sendJson(res, 500, { ok: false, error: "Gemini analysis failed: " + (err instanceof Error ? err.message : String(err)) });
+        }
         return;
       }
 

@@ -13,6 +13,7 @@ export interface NormalizedChannelState {
   forwardCountOut: number;
   forwardCountTotal: number;
   revenueSat: number;
+  forwardingEarningPpm: number | null;
   failedForwardCount: number;
   lastActivityTimestamp: number | null;
   peerBetweennessCentrality: number | null;
@@ -20,6 +21,8 @@ export interface NormalizedChannelState {
   missionFailureRate: number | null;
   missionLastSuccessTimestamp: number | null;
   missionLastFailTimestamp: number | null;
+  networkInAvg: number | null;
+  networkOutAvg: number | null;
 }
 
 export interface NormalizedPeerAggregate {
@@ -44,6 +47,17 @@ export interface NormalizedPeerAggregate {
   missionLastFailTimestamp: number | null;
 }
 
+export interface NormalizedPotentialPeer {
+  pubkey: string;
+  alias: string;
+  capacitySat: number;
+  channelCount: number;
+  betweennessCentrality: number | null;
+  missionSuccessRate: number | null;
+  missionFailureRate: number | null;
+  lastActivityTimestamp: number | null;
+}
+
 export interface NormalizedNodeState {
   schemaVersion: "normalized-node-state-v1";
   sourceType: "lnc";
@@ -54,6 +68,7 @@ export interface NormalizedNodeState {
   channelCount: number;
   channels: NormalizedChannelState[];
   peers: NormalizedPeerAggregate[];
+  potentialPeers: NormalizedPotentialPeer[];
   totals: {
     capacitySat: number;
     localBalanceSat: number;
