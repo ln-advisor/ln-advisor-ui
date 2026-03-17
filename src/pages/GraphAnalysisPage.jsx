@@ -853,7 +853,6 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         includeAuthProof,
         missionControl,
         nodeMetrics,
-        privacyMode,
     ]);
 
     return (
@@ -863,7 +862,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                 <div>
                     <div className="flex flex-col gap-3">
                         <h2 className="text-2xl md:text-3xl font-semibold font-display" style={{ color: 'var(--text-primary)' }}>
-                            Graph Analysis
+                            Node &amp; Network Analysis
                         </h2>
                         <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-widest"
                             style={{ color: 'var(--text-secondary)' }}>
@@ -876,40 +875,17 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         />
                     </div>
                     <p className="text-sm mt-2 max-w-xl" style={{ color: 'var(--text-secondary)' }}>
-                        Snapshot and explore network structure, fee strategies, and channel distribution in one view.
+                        Live read-only analysis of your node’s network position, forwarding performance,
+                        and routing intelligence. Data is fetched directly from your node via LNC —
+                        no external API calls are made from this page.
                     </p>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-                        style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.04)', color: 'var(--text-secondary)' }}>
-                        <span className="uppercase tracking-widest font-semibold">Range</span>
-                        <select
-                            value={rangeDays}
-                            onChange={(e) => setRangeDays(Number(e.target.value))}
-                            className="bg-transparent outline-none text-xs"
-                            style={{ color: 'var(--text-primary)' }}
-                        >
-                            <option value={7}>7d</option>
-                            <option value={14}>14d</option>
-                            <option value={30}>30d</option>
-                            <option value={90}>90d</option>
-                        </select>
-                    </div>
-                    <label className="text-xs flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer"
-                        style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.04)', color: 'var(--text-secondary)' }}>
-                        <input type="checkbox" checked={includeUnannounced} onChange={(e) => setIncludeUnannounced(e.target.checked)} />
-                        include_unannounced
-                    </label>
-                    <label className="text-xs flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer"
-                        style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.04)', color: 'var(--text-secondary)' }}>
-                        <input type="checkbox" checked={includeAuthProof} onChange={(e) => setIncludeAuthProof(e.target.checked)} />
-                        include_auth_proof
-                    </label>
+                <div className="flex items-center gap-3">
                     <button
                         onClick={fetchData}
                         disabled={isLoading}
                         style={{
-                            padding: '10px 18px',
+                            padding: '10px 20px',
                             borderRadius: 12,
                             fontSize: 13,
                             fontWeight: 700,
@@ -918,62 +894,26 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                             background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))',
                             color: '#fff',
                             boxShadow: darkMode ? '0 8px 18px rgba(34,211,238,0.25)' : '0 8px 18px rgba(37,99,235,0.2)',
-                            opacity: isLoading ? 0.7 : 1,
+                            opacity: isLoading ? 0.65 : 1,
                             transition: 'opacity 0.2s',
                         }}
                     >
                         {isLoading ? 'Loading…' : 'Fetch Data'}
                     </button>
-                    {isLoading && <InlineSpinner label="Fetching graph + private signals…" />}
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-                        style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.04)', color: 'var(--text-secondary)' }}>
-                        <span className="uppercase tracking-widest font-semibold">Privacy</span>
-                        <select
-                            value={privacyMode}
-                            onChange={(e) => setPrivacyMode(String(e.target.value))}
-                            className="bg-transparent outline-none text-xs"
-                            style={{ color: 'var(--text-primary)' }}
+                    {isLoading && <InlineSpinner label="Fetching graph + signals…" />}
+                    {!isLoading && graph && (
+                        <span
+                            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold"
+                            style={{
+                                background: darkMode ? 'rgba(34,197,94,0.15)' : 'rgba(34,197,94,0.12)',
+                                color: darkMode ? '#4ade80' : '#166534',
+                                border: `1px solid ${darkMode ? 'rgba(34,197,94,0.3)' : 'rgba(34,197,94,0.2)'}`,
+                            }}
                         >
-                            <option value="feature_only">feature_only</option>
-                            <option value="banded">banded</option>
-                            <option value="full_internal">full_internal</option>
-                        </select>
-                    </div>
-                    <button
-                        onClick={runAnalysisPipeline}
-                        disabled={propsLoading || !graph}
-                        style={{
-                            padding: '10px 18px',
-                            borderRadius: 12,
-                            fontSize: 13,
-                            fontWeight: 700,
-                            cursor: propsLoading || !graph ? 'not-allowed' : 'pointer',
-                            border: `1px solid ${darkMode ? 'rgba(251,191,36,0.45)' : 'rgba(180,83,9,0.25)'}`,
-                            background: darkMode ? 'rgba(251,191,36,0.15)' : 'rgba(251,191,36,0.2)',
-                            color: darkMode ? '#fef08a' : '#854d0e',
-                            opacity: propsLoading || !graph ? 0.65 : 1,
-                        }}
-                    >
-                        {propsLoading ? 'Running analysis...' : 'Run Analysis'}
-                    </button>
-                    {propsLoading && <InlineSpinner label="Sending request and verifying result..." />}
-                    <button
-                        onClick={() => graph && makeDownload(`describeGraph-${new Date().toISOString()}.json`, graph)}
-                        disabled={!graph}
-                        style={{
-                            padding: '10px 14px',
-                            borderRadius: 12,
-                            fontSize: 13,
-                            fontWeight: 700,
-                            cursor: graph ? 'pointer' : 'not-allowed',
-                            border: `1px solid ${darkMode ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.16)'}`,
-                            background: 'transparent',
-                            color: 'var(--text-secondary)',
-                            opacity: graph ? 1 : 0.5,
-                        }}
-                    >
-                        Export JSON
-                    </button>
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
+                            Data Loaded
+                        </span>
+                    )}
                 </div>
             </div>
 
@@ -981,14 +921,13 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             <ErrorBanner message={forwardingError} />
             <ErrorBanner message={missionError} />
             <ErrorBanner message={nodeMetricsError} />
-            <ErrorBanner message={propsError} />
 
             {!graph && !isLoading && !error && (
                 <div className="rounded-xl p-8 text-sm text-center" style={{ backgroundColor: 'var(--form-bg)', color: 'var(--text-secondary)' }}>
                     <div className="text-xs uppercase tracking-widest font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
                         Ready When You Are
                     </div>
-                    <p>Click <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Fetch Data</span> to load the Lightning network snapshot and forwarding history.</p>
+                    <p>Click <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Fetch Data</span> to load the Lightning network snapshot and forwarding history from your node.</p>
                 </div>
             )}
 

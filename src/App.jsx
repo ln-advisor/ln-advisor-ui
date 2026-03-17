@@ -14,11 +14,13 @@ import DarkModeToggle from './components/DarkModeToggle';
 import NavBar from './components/NavBar';
 import PeersModal from './components/PeersModal';
 import DemoGraphAnalysis from './components/DemoGraphAnalysis';
+import LoginGate from './components/LoginGate';
 import { getMockLightningSnapshot } from './connectors/mockLightningSnapshot';
 
 import GraphAnalysisPage from './pages/GraphAnalysisPage';
 import ChannelsPage from './pages/ChannelsPage';
 import RecommendationsPage from './pages/RecommendationsPage';
+import HomePage from './pages/HomePage';
 
 function App() {
   const mockLightningEnabled = String(import.meta.env.VITE_ENABLE_MOCK_LIGHTNING_UI || '').trim().toLowerCase() === 'true';
@@ -27,6 +29,8 @@ function App() {
   // LNC & Node State
   const [lnc, setLncState] = useState(null);
   const isMockLightningUi = !lnc && Boolean(mockSnapshot);
+  const [showConnect, setShowConnect] = useState(false);
+
   const [isPaired, setIsPaired] = useState(() => {
     try {
       return Boolean(new LNC({ namespace: 'tapvolt' })?.credentials?.isPaired);
@@ -355,7 +359,7 @@ function App() {
                   onShowPeers={() => setIsPeersModalOpen(true)}
                 />
 
-                <NavBar darkMode={darkMode} />
+                <NavBar darkMode={darkMode} isLoggedIn={true} />
 
                 <Routes>
                   <Route
@@ -392,30 +396,116 @@ function App() {
       );
     }
 
-    if (showDemo) {
+    if (showConnect || showDemo) {
+      if (showDemo) {
+        return (
+          <DemoGraphAnalysis
+            darkMode={darkMode}
+            onConnect={() => setShowDemo(false)}
+          />
+        );
+      }
       return (
-        <DemoGraphAnalysis
+        <ConnectScreen
           darkMode={darkMode}
-          onConnect={() => setShowDemo(false)}
+          toggleDarkMode={toggleDarkMode}
+          pairingPhrase={pairingPhrase}
+          setPairingPhrase={setPairingPhrase}
+          password={password}
+          setPassword={setPassword}
+          isConnecting={isConnecting}
+          handleConnect={handleConnect}
+          handleLogin={handleLogin}
+          onShowPairing={() => setIsPaired(false)}
+          connectionError={connectionError}
+          isPaired={isPaired}
+          onPreview={() => { setShowDemo(true); setShowConnect(false); }}
+          onBack={() => setShowConnect(false)}
         />
       );
     }
+
+    // Show full app for unauthenticated users — protected pages wrapped with LoginGate
     return (
-      <ConnectScreen
-        darkMode={darkMode}
-        toggleDarkMode={toggleDarkMode}
-        pairingPhrase={pairingPhrase}
-        setPairingPhrase={setPairingPhrase}
-        password={password}
-        setPassword={setPassword}
-        isConnecting={isConnecting}
-        handleConnect={handleConnect}
-        handleLogin={handleLogin}
-        onShowPairing={() => setIsPaired(false)}
-        connectionError={connectionError}
-        isPaired={isPaired}
-        onPreview={() => setShowDemo(true)}
-      />
+      <HashRouter>
+        <div
+          className="min-h-screen relative overflow-hidden transition-colors duration-300"
+          style={{ background: 'var(--bg-gradient)', color: 'var(--text-primary)' }}
+        >
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute -top-40 -left-40 h-96 w-96 rounded-full blur-3xl" style={{ background: 'var(--glow-1)' }} />
+            <div className="absolute top-10 right-[-10%] h-[28rem] w-[28rem] rounded-full blur-3xl" style={{ background: 'var(--glow-2)' }} />
+            <div className="absolute bottom-[-20%] left-[25%] h-80 w-80 rounded-full blur-3xl" style={{ background: 'var(--glow-3)' }} />
+            <div
+              className="absolute inset-0"
+              style={{
+                backgroundImage: 'var(--bg-grid)',
+                backgroundSize: '22px 22px',
+                opacity: darkMode ? 0.35 : 0.55,
+              }}
+            />
+          </div>
+
+          <DarkModeToggle darkMode={darkMode} toggleDarkMode={toggleDarkMode} />
+
+          <div className="relative z-10">
+            <div
+              className="max-w-6xl mx-auto rounded-3xl shadow-xl transition-all duration-300"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                boxShadow: 'var(--card-shadow)',
+                border: `1px solid ${darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)'}`,
+                margin: '20px auto 40px',
+                backdropFilter: 'blur(12px)',
+              }}
+            >
+              <AppHeader nodeInfo={null} nodeChannelsCount="—" peersCount="—" onShowPeers={() => {}} />
+              <NavBar
+                darkMode={darkMode}
+                isLoggedIn={false}
+                onNavigateToConnect={() => setShowConnect(true)}
+              />
+              <Routes>
+                <Route
+                  path="/"
+                  element={
+                    <HomePage
+                      darkMode={darkMode}
+                      isLoggedIn={false}
+                      onNavigateToConnect={() => setShowConnect(true)}
+                    />
+                  }
+                />
+                <Route
+                  path="/graph"
+                  element={
+                    <LoginGate isLoggedIn={false} darkMode={darkMode} onNavigateToConnect={() => setShowConnect(true)}>
+                      <GraphAnalysisPage lnc={null} darkMode={darkMode} />
+                    </LoginGate>
+                  }
+                />
+                <Route
+                  path="/channels"
+                  element={
+                    <LoginGate isLoggedIn={false} darkMode={darkMode} onNavigateToConnect={() => setShowConnect(true)}>
+                      <ChannelsPage lnc={null} darkMode={darkMode} nodeChannels={[]} />
+                    </LoginGate>
+                  }
+                />
+                <Route
+                  path="/recommendations"
+                  element={
+                    <LoginGate isLoggedIn={false} darkMode={darkMode} onNavigateToConnect={() => setShowConnect(true)}>
+                      <RecommendationsPage lnc={null} darkMode={darkMode} />
+                    </LoginGate>
+                  }
+                />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </div>
+          </div>
+        </div>
+      </HashRouter>
     );
   }
 
@@ -459,13 +549,14 @@ function App() {
               onShowPeers={() => setIsPeersModalOpen(true)}
             />
 
-            <NavBar darkMode={darkMode} />
+            <NavBar darkMode={darkMode} isLoggedIn={true} />
 
             <Routes>
+              <Route path="/" element={<HomePage darkMode={darkMode} isLoggedIn={true} />} />
               <Route path="/graph" element={<GraphAnalysisPage lnc={lnc} darkMode={darkMode} />} />
               <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
               <Route path="/recommendations" element={<RecommendationsPage lnc={lnc} darkMode={darkMode} />} />
-              <Route path="*" element={<Navigate to="/graph" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
 
             <PeersModal
