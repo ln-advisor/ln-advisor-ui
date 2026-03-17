@@ -47,7 +47,7 @@ services:
       PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION: "true"
       PHALA_CLOUD_API_BASE_URL: "https://cloud-api.phala.network/api/v1"
       PHALA_API_VERSION: "2026-01-21"
-      PHALA_CLOUD_API_KEY: "phak_Duqi9Ua4TeeDOeRIQJBJfiIRd7J4vtlHRKV04N77eWk"
+      PHALA_CLOUD_API_KEY: ""
     command:
       - node
       - --input-type=module
