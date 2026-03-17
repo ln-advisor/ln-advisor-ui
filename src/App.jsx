@@ -345,7 +345,7 @@ function App() {
                     color: darkMode ? '#93c5fd' : '#1d4ed8',
                   }}
                 >
-                  Mock Lightning UI Mode
+                  Mock Data Mode
                 </div>
 
                 <AppHeader
@@ -383,7 +383,7 @@ function App() {
                   className="px-6 py-4 border-t text-center text-xs"
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
                 >
-                  <p>LN Advisor Console</p>
+                  <p>LN Advisor</p>
                 </footer>
               </div>
             </div>
@@ -481,7 +481,7 @@ function App() {
               className="px-6 py-4 border-t text-center text-xs"
               style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
             >
-              <p>LN Advisor Console</p>
+              <p>LN Advisor</p>
             </footer>
           </div>
         </div>

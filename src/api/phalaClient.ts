@@ -27,7 +27,7 @@ export interface PhalaVerifiedRunResult {
 
 const ensureBaseUrl = (): string => {
   if (!PHALA_MINIMAL_APP_URL) {
-    throw new Error("Missing VITE_PHALA_MINIMAL_APP_URL for the Phala verified path.");
+    throw new Error("Missing verified service configuration.");
   }
   return import.meta.env.DEV ? PHALA_DEV_PROXY_BASE : PHALA_MINIMAL_APP_URL;
 };
@@ -36,14 +36,14 @@ const parseJsonResponse = async (response: Response): Promise<any> => {
   const text = await response.text();
   if (!text.trim()) {
     if (!response.ok) {
-      throw new Error(`Phala request failed with empty response (${response.status}).`);
+      throw new Error(`Verified request failed with empty response (${response.status}).`);
     }
-    throw new Error(`Phala returned an empty response (${response.status}).`);
+    throw new Error(`Verified service returned an empty response (${response.status}).`);
   }
   try {
     return JSON.parse(text);
   } catch (_error) {
-    throw new Error(`Phala returned invalid JSON (${response.status}).`);
+    throw new Error(`Verified service returned invalid JSON (${response.status}).`);
   }
 };
 
@@ -53,7 +53,7 @@ const getJson = async <T>(path: string): Promise<T> => {
   });
   const payload = await parseJsonResponse(response);
   if (!response.ok) {
-    throw new Error((payload && payload.error) || `Phala request failed for ${path}`);
+    throw new Error((payload && payload.error) || `Verified request failed for ${path}`);
   }
   return payload as T;
 };
@@ -66,7 +66,7 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   });
   const payload = await parseJsonResponse(response);
   if (!response.ok) {
-    throw new Error((payload && payload.error) || `Phala request failed for ${path}`);
+    throw new Error((payload && payload.error) || `Verified request failed for ${path}`);
   }
   return payload as T;
 };
@@ -89,7 +89,7 @@ export const getPhalaUiConfig = (): PhalaUiConfig => {
       enabled: true,
       available: false,
       appUrl: "",
-      reason: "Phala verified endpoint is not configured.",
+      reason: "Verified service is not configured.",
     };
   }
 

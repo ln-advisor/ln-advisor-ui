@@ -1,34 +1,21 @@
-# LN Prop Advisor
+# LN Advisor
 
-LN Prop Advisor is a Lightning operator UI.
+LN Advisor is a Lightning operator UI.
 
-## Why Props
+## What it does
 
-LN Prop Advisor uses a Props-style flow for Lightning recommendations.
+LN Advisor runs in the browser and connects to the node through LNC.
 
-In this app:
-- the browser connects to the node and reads data locally
-- the UI normalizes the relevant node state
-- the UI builds a reduced payload
-- the operator reviews the exact outgoing request before it is sent
-- the verified service returns a recommendation plus verification data
-
-## How the verified path works
-
-The verified flows use a Phala-hosted service.
-
-At a high level:
-1. the browser reads Lightning data locally through LNC
-2. the UI builds a reduced payload for the selected workflow
-3. the operator reviews the exact request body in the browser
-4. that payload is sent to the verified service running on Phala
-5. the service returns:
+For verified workflows:
+1. the browser reads the required node data locally
+2. the UI builds a reduced request for the selected workflow
+3. the operator reviews the exact request before it is sent
+4. the service returns:
    - a recommendation
    - a signed result bundle
-   - app evidence used for verification
-6. the UI checks the verification result and shows it in `Phala Trust Status`
+   - verification data shown in the UI
 
-The verified pages currently documented here are:
+The verified workflows currently documented here are:
 - `Channels`
 - `Opening Recommendations`
 
@@ -77,28 +64,28 @@ http://localhost:5173
 1. connect your node in the browser
 2. open `Channels`
 3. open a channel
-4. choose `Verified Phala`
-5. click `Review & Send`
+4. choose `Verified`
+5. click `Review Request`
 6. review the request body
-7. click `Send to Phala`
+7. click `Send Request`
 8. inspect:
    - recommendation
-   - `Phala Trust Status`
-   - `PROPS Pipeline Explorer`
+   - `Verification Status`
+   - `Request Inspector`
 
 ### Opening Recommendations
 
 1. connect your node in the browser
 2. open `Opening Recommendations`
 3. click `Sync Graph Data`
-4. choose `Verified Phala`
-5. click `Review & Send`
+4. choose `Verified`
+5. click `Review Request`
 6. review the request body
-7. click `Send to Phala`
+7. click `Send Request`
 8. inspect:
    - candidate peer cards
-   - `Phala Trust Status`
-   - `PROPS Pipeline Explorer`
+   - `Verification Status`
+   - `Request Inspector`
 
 ## Local API
 
@@ -113,8 +100,8 @@ pnpm api
 User-facing docs:
 - [docs/README.md](./docs/README.md)
 - [docs/local-self-hosted.md](./docs/local-self-hosted.md)
-- [docs/channels-phala-verified.md](./docs/channels-phala-verified.md)
-- [docs/opening-recs-phala-verified.md](./docs/opening-recs-phala-verified.md)
+- [docs/channels-verified.md](./docs/channels-verified.md)
+- [docs/opening-recommendations-verified.md](./docs/opening-recommendations-verified.md)
 - [docs/verification-reference.md](./docs/verification-reference.md)
 
 Deployment material:

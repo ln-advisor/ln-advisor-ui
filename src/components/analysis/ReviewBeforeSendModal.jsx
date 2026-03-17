@@ -27,7 +27,7 @@ const ReviewBeforeSendModal = ({
           <div>
             <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{title}</h3>
             <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              Review the exact request before anything is sent to the verified service.
+              Review the exact request before it is sent.
             </p>
           </div>
           <button onClick={onClose} disabled={sending} className="text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -124,7 +124,7 @@ const ReviewBeforeSendModal = ({
               opacity: sending ? 0.7 : 1,
             }}
           >
-            {sending ? 'Sending...' : 'Send to Phala'}
+            {sending ? 'Sending...' : 'Send Request'}
           </button>
         </div>
       </div>

@@ -1,14 +1,14 @@
-# Channels Verified Phala Flow
+# Channels Verified Flow
 
 ## Use the page
 
 1. connect your node in the browser
 2. open `Channels`
 3. click a channel row
-4. in `Props Advisor`, choose `Verified Phala`
-5. click `Review & Send`
+4. in `LN Advisor`, choose `Verified`
+5. click `Review Request`
 6. review the request body
-7. click `Send to Phala`
+7. click `Send Request`
 
 ## Result sections
 
@@ -16,8 +16,8 @@ After a successful run, the page shows:
 - suggested fee action
 - target fee rate
 - model confidence
-- `Phala Trust Status`
-- `PROPS Pipeline Explorer`
+- `Verification Status`
+- `Request Inspector`
 
 ## Requests used by the verified flow
 
@@ -32,8 +32,8 @@ The verified flow uses:
 - `POST /api/verify`
 
 In the UI, these are visible in:
-- `PROPS Pipeline Explorer`
-- `Stage 4: Outgoing Browser Requests`
+- `Request Inspector`
+- `Stage 4: Network Requests`
 
 ## Review modal
 
@@ -46,9 +46,9 @@ Before the request is sent, the review modal shows:
 
 Use:
 - `Cancel` to stop
-- `Send to Phala` to continue
+- `Send Request` to continue
 
-## Pipeline Explorer
+## Request Inspector
 
 ### Stage 1: Raw
 - local channel data for the selected run
@@ -56,10 +56,10 @@ Use:
 ### Stage 2: Normalized
 - structured local intermediate state
 
-### Stage 3: PROPS Final Payload
+### Stage 3: Outgoing Payload
 - reduced payload prepared for the verified run
 
-### Stage 4: Outgoing Browser Requests
+### Stage 4: Network Requests
 - exact request body
 - exact endpoint
 - exact method
@@ -70,7 +70,7 @@ Use:
 After a successful verified run, the UI shows:
 - signer
 - signer type
-- quote check
+- runtime check
 - measurement status
-- attestation source
-- live evidence policy
+- runtime source
+- live verification

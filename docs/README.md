@@ -9,12 +9,12 @@
 
 ## Verified flows
 
-2. [channels-phala-verified.md](./channels-phala-verified.md)
+2. [channels-verified.md](./channels-verified.md)
    - `Channels` verified flow
    - review-before-send
    - verification panel
 
-3. [opening-recs-phala-verified.md](./opening-recs-phala-verified.md)
+3. [opening-recommendations-verified.md](./opening-recommendations-verified.md)
    - `Opening Recommendations` verified flow
    - review-before-send
    - candidate peer results

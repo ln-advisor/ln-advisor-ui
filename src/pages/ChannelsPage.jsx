@@ -156,7 +156,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
     const [peerFeeLoading, setPeerFeeLoading] = useState(false);
     const [peerFeeError, setPeerFeeError] = useState(null);
 
-    // Props Advisor Modal State
+    // LN Advisor Modal State
     const [propsLoading, setPropsLoading] = useState(false);
     const [propsRecommendation, setPropsRecommendation] = useState(null);
     const [propsError, setPropsError] = useState(null);
@@ -562,8 +562,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             }
 
             return {
-                route: 'Verified Phala',
-                transport: import.meta.env.DEV ? 'Browser -> localhost Vite proxy -> Phala app' : 'Browser -> Phala app',
+                route: 'Verified',
+                transport: import.meta.env.DEV ? 'Browser -> Vite proxy -> verified service' : 'Browser -> verified service',
                 destination: baseUrl,
                 requests,
             };
@@ -691,7 +691,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
 
     const handleRunChannelAnalysis = async () => {
         if (!lnc?.lnd?.lightning && !isMockMode) {
-            setPropsError('Lightning connection or mock lightning mode is required before running the Props pipeline.');
+            setPropsError('A Lightning connection or mock data is required before running analysis.');
             return;
         }
 
@@ -761,7 +761,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
 
             const recommendation = extractFeeRecommendation(res);
             if (!recommendation) {
-                throw new Error('Props API returned no fee recommendation for the selected channel.');
+                throw new Error('Local analysis returned no fee recommendation for the selected channel.');
             }
 
             setPropsRecommendation(recommendation);
@@ -785,11 +785,11 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 setVerifyResult({ ok: false, error: vErr.message });
             }
         } catch (err) {
-            console.error('Props pipeline failed:', err);
+            console.error('Analysis failed:', err);
             setPropsRecommendation(null);
             setVerifyResult(null);
             setPhalaRun(null);
-            setPropsError(err?.message || 'Props pipeline failed.');
+            setPropsError(err?.message || 'Analysis failed.');
         } finally {
             setPropsLoading(false);
         }
@@ -807,7 +807,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             const recommendation = extractFeeRecommendation(phalaResponse.recommend);
 
             if (!recommendation) {
-                throw new Error('Phala verified path returned no fee recommendation for the selected channel.');
+                throw new Error('Verified run returned no fee recommendation for the selected channel.');
             }
 
             setPropsRecommendation(recommendation);
@@ -825,11 +825,11 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 }),
             }));
         } catch (err) {
-            console.error('Props pipeline failed:', err);
+            console.error('Analysis failed:', err);
             setPropsRecommendation(null);
             setVerifyResult(null);
             setPhalaRun(null);
-            setPropsError(err?.message || 'Props pipeline failed.');
+            setPropsError(err?.message || 'Analysis failed.');
         } finally {
             setPropsLoading(false);
         }
@@ -1691,8 +1691,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                         </svg>
                                     </div>
                                     <div>
-                                        <h4 className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>Props Advisor</h4>
-                                        <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Protected intelligence fee optimization</p>
+                                        <h4 className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>LN Advisor</h4>
+                                        <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Fee analysis for a single channel</p>
                                     </div>
                                 </div>
                                 <div className="flex flex-col items-end gap-2">
@@ -1724,14 +1724,14 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                         backgroundColor: activeAnalysisMode === 'phala_verified' ? 'rgba(59,130,246,0.18)' : 'transparent',
                                                         color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)',
                                                     }}
-                                                    title={phalaModeAvailable ? 'Use the Phala verified path' : (PHALA_UI_CONFIG.reason || 'Phala verified path is unavailable')}
+                                                    title={phalaModeAvailable ? 'Use the verified route' : (PHALA_UI_CONFIG.reason || 'Verified route is unavailable')}
                                                 >
-                                                    Verified Phala
+                                                    Verified
                                                 </button>
                                             </div>
                                             {!phalaModeAvailable && (
                                                 <span className="text-[10px]" style={{ color: darkMode ? '#fda4af' : '#9f1239' }}>
-                                                    {PHALA_UI_CONFIG.reason || 'Phala verified path is unavailable.'}
+                                                    {PHALA_UI_CONFIG.reason || 'Verified route is unavailable.'}
                                                 </span>
                                             )}
                                         </div>
@@ -1743,9 +1743,9 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                         style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
                                     >
                                         {propsLoading
-                                            ? (activeAnalysisMode === 'phala_verified' ? 'Running Verified Phala...' : 'Running Props...')
+                                            ? (activeAnalysisMode === 'phala_verified' ? 'Running verified analysis...' : 'Running analysis...')
                                             : activeAnalysisMode === 'phala_verified'
-                                                ? 'Review & Send'
+                                                ? 'Review Request'
                                                 : propsRecommendation
                                                     ? 'Re-run Analysis'
                                                     : 'Analyze Channel'}
@@ -1774,7 +1774,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                 <div className="flex items-center gap-2">
                                                     {verifyResult?.ok && (
                                                         <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-bold uppercase tracking-widest">
-                                                            ARB Verified
+                                                            Verified
                                                         </span>
                                                     )}
                                                     <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${propsRecommendation.action?.toLowerCase() === 'lower' || propsRecommendation.action?.toLowerCase() === 'decrease' ? 'bg-rose-500/20 text-rose-500' :
@@ -1819,14 +1819,14 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Analysis Route</span>
                                                 <span className="font-mono text-xs" style={{ color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)' }}>
-                                                    {activeAnalysisMode === 'phala_verified' ? 'Verified Phala' : 'Standard API'}
+                                                    {activeAnalysisMode === 'phala_verified' ? 'Verified' : 'Standard API'}
                                                 </span>
                                             </div>
 
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Verification</span>
                                                 <span className="font-mono text-xs" style={{ color: verifyResult?.ok ? '#22c55e' : '#f97316' }}>
-                                                    {verifyResult ? (verifyResult.ok ? 'ARB verified' : 'Verification failed') : 'Pending'}
+                                                    {verifyResult ? (verifyResult.ok ? 'Verified' : 'Verification failed') : 'Pending'}
                                                 </span>
                                             </div>
 
@@ -1837,7 +1837,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                         border: `1px solid ${darkMode ? 'rgba(96,165,250,0.18)' : 'rgba(59,130,246,0.14)'}`,
                                                     }}>
                                                     <div className="flex items-center justify-between">
-                                                        <h5 className="text-[10px] font-bold uppercase tracking-widest text-blue-400">Phala Trust Status</h5>
+                                                        <h5 className="text-[10px] font-bold uppercase tracking-widest text-blue-400">Verification Status</h5>
                                                         <span className="text-[10px] font-mono" style={{ color: verifyResult?.ok ? '#22c55e' : '#f97316' }}>
                                                             {verifyResult?.ok ? 'Verified' : 'Needs review'}
                                                         </span>
@@ -1856,7 +1856,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                             </span>
                                                         </div>
                                                         <div className="flex items-center justify-between gap-3">
-                                                            <span style={{ color: 'var(--text-secondary)' }}>Quote Check</span>
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Runtime Check</span>
                                                             <span className="font-mono" style={{ color: phalaRun?.verify?.cloudVerification?.quoteVerified ? '#22c55e' : '#f97316' }}>
                                                                 {phalaRun?.verify?.cloudVerification?.quoteVerified ? 'Cloud verified' : 'Unavailable'}
                                                             </span>
@@ -1870,13 +1870,13 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                             </span>
                                                         </div>
                                                         <div className="flex items-center justify-between gap-3">
-                                                            <span style={{ color: 'var(--text-secondary)' }}>Attestation Source</span>
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Runtime Source</span>
                                                             <span className="font-mono" style={{ color: 'var(--text-primary)' }}>
                                                                 {phalaRun?.health?.attestationSource || 'â€”'}
                                                             </span>
                                                         </div>
                                                         <div className="flex items-center justify-between gap-3">
-                                                            <span style={{ color: 'var(--text-secondary)' }}>Live Evidence</span>
+                                                            <span style={{ color: 'var(--text-secondary)' }}>Live Verification</span>
                                                             <span className="font-mono" style={{ color: verifyResult?.liveAppEvidencePolicy?.requireLiveAppEvidence ? '#22c55e' : 'var(--text-secondary)' }}>
                                                                 {verifyResult?.liveAppEvidencePolicy?.requireLiveAppEvidence ? 'Required' : 'Optional'}
                                                             </span>
@@ -1992,13 +1992,13 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
 
                             {!propsRecommendation && !propsLoading && (
                                 <div className="p-5 text-sm flex items-center justify-center text-center text-white/40 h-32">
-                                    Click Analyze Channel to bundle the telemetry and request a Fee Policy recommendation from the Props Pipeline.
+                                    Run channel analysis to generate a fee recommendation.
                                 </div>
                             )}
                             {propsLoading && (
                                 <div className="p-5 flex flex-col items-center justify-center h-32 space-y-3">
                                     <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                                    <p className="text-xs text-indigo-400 font-mono animate-pulse">Running Props Inference Pipeline...</p>
+                                    <p className="text-xs text-indigo-400 font-mono animate-pulse">Running analysis...</p>
                                 </div>
                             )}
 
@@ -2015,7 +2015,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
                                                 </svg>
                                             </div>
-                                            PROPS Pipeline Explorer
+                                            Request Inspector
                                         </div>
                                         <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold opacity-50">
                                             {showPipeline ? 'Hide' : 'Expand'}
@@ -2062,12 +2062,12 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                 <div className="rounded-xl p-4 space-y-3" style={{ backgroundColor: 'rgba(0,0,0,0.2)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
                                                     <div className="flex items-center gap-2">
                                                         <div className="w-5 h-5 rounded-md bg-emerald-500/20 text-emerald-500 flex items-center justify-center text-[10px] font-bold">3</div>
-                                                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-emerald-500/80">PROPS Shield</h4>
+                                                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-emerald-500/80">Outgoing Payload</h4>
                                                     </div>
                                                     <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>Anonymized, banded & rounded for transmission.</p>
                                                     <button
                                                         className="w-full py-1.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase border border-emerald-500/20 hover:bg-emerald-500/20 transition-all"
-                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 3: PROPS Final Payload', data: pipelineData.propsPayload })}
+                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 3: Outgoing Payload', data: pipelineData.propsPayload })}
                                                     >
                                                         Inspect Payload
                                                     </button>
@@ -2085,7 +2085,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                     </div>
                                                     <button
                                                         className="w-full py-1.5 rounded-lg bg-violet-500/10 text-violet-400 text-[10px] font-bold uppercase border border-violet-500/20 hover:bg-violet-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 4: Outgoing Browser Requests', data: pipelineData.outgoingInspector })}
+                                                        onClick={() => setModalConfig({ isOpen: true, title: 'Stage 4: Network Requests', data: pipelineData.outgoingInspector })}
                                                         disabled={!pipelineData.outgoingInspector}
                                                     >
                                                         Inspect Requests
@@ -2098,15 +2098,14 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                     <svg className="w-3 h-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                                     </svg>
-                                                    <h5 className="text-[10px] font-bold uppercase tracking-widest text-indigo-400">Props Architecture</h5>
+                                                    <h5 className="text-[10px] font-bold uppercase tracking-widest text-indigo-400">Privacy Note</h5>
                                                 </div>
                                                 <p className="text-[10px] leading-relaxed text-indigo-300/60">
-                                                    Protected Pipelines (PROPS) preserve privacy by applying client-side transformations (`f(X)`) before data leaves your infrastructure.
-                                                    Sensitive IDs are masked and balances are banded to prevent individual node recognition.
+                                                    LN Advisor prepares a reduced request locally before it is sent. Review the outgoing payload and request plan before continuing.
                                                 </p>
                                             </div>
 
-                                            <p className="text-[9px] text-white/20 text-center uppercase tracking-tighter">This telemetry packet is processed inside a protected TEE inference boundary.</p>
+                                            <p className="text-[9px] text-white/20 text-center uppercase tracking-tighter">Verified runs include request, signature, and runtime checks before results are shown.</p>
                                         </div>
                                     )}
                                 </div>

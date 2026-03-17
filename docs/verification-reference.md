@@ -4,7 +4,7 @@
 
 On verified pages, click:
 
-- `Review & Send`
+- `Review Request`
 
 Before any request is sent, the modal shows:
 - route
@@ -15,13 +15,13 @@ Before any request is sent, the modal shows:
 
 Use:
 - `Cancel` to stop
-- `Send to Phala` to continue
+- `Send Request` to continue
 
 ## Where to inspect outgoing data after a run
 
 Expand:
 
-- `PROPS Pipeline Explorer`
+- `Request Inspector`
 
 ### Stage 1: Raw
 - local input counts and extracted data used for the run
@@ -29,18 +29,18 @@ Expand:
 ### Stage 2: Normalized
 - normalized intermediate state
 
-### Stage 3: PROPS Final Payload
+### Stage 3: Outgoing Payload
 - reduced payload prepared for the recommendation run
 
-### Stage 4: Outgoing Browser Requests
+### Stage 4: Network Requests
 - exact endpoint
 - HTTP method
 - request body
 - request body size in bytes
 
-## Phala Trust Status fields
+## Verification Status fields
 
-After a verified run, the `Phala Trust Status` panel shows:
+After a verified run, the `Verification Status` panel shows:
 
 ### Signer
 - signer provider id used by the verification result
@@ -48,14 +48,14 @@ After a verified run, the `Phala Trust Status` panel shows:
 ### Signer Type
 - signer provider type reported by verification
 
-### Quote Check
+### Runtime Check
 - whether cloud quote verification succeeded
 
 ### Measurement
 - pinned measurement value when available
 
-### Attestation Source
-- app attestation source reported by the Phala service
+### Runtime Source
+- app runtime source reported by the verified service
 
-### Live Evidence
+### Live Verification
 - whether live app evidence is required by the verification policy

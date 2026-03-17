@@ -790,9 +790,9 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         };
     }, [recommendApiResult, verifyApiResult]);
 
-    const runPropsPipeline = useCallback(async () => {
+    const runAnalysisPipeline = useCallback(async () => {
         if (!graph) {
-            setPropsError('Fetch data first, then run the Props pipeline.');
+            setPropsError('Fetch data first, then run the analysis pipeline.');
             return;
         }
 
@@ -837,8 +837,8 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             );
             setVerifyApiResult(verifyResponse);
         } catch (e) {
-            console.error('Props pipeline failed:', e);
-            setPropsError(e?.message || 'Props API request failed.');
+            console.error('Analysis failed:', e);
+            setPropsError(e?.message || 'Analysis request failed.');
         } finally {
             setPropsLoading(false);
         }
@@ -940,7 +940,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         </select>
                     </div>
                     <button
-                        onClick={runPropsPipeline}
+                        onClick={runAnalysisPipeline}
                         disabled={propsLoading || !graph}
                         style={{
                             padding: '10px 18px',
@@ -954,9 +954,9 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                             opacity: propsLoading || !graph ? 0.65 : 1,
                         }}
                     >
-                        {propsLoading ? 'Running Props…' : 'Run Props Pipeline'}
+                        {propsLoading ? 'Running analysis...' : 'Run Analysis'}
                     </button>
-                    {propsLoading && <InlineSpinner label="Posting telemetry to API + verifying ARB…" />}
+                    {propsLoading && <InlineSpinner label="Sending request and verifying result..." />}
                     <button
                         onClick={() => graph && makeDownload(`describeGraph-${new Date().toISOString()}.json`, graph)}
                         disabled={!graph}
@@ -995,8 +995,8 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             {graph && (
                 <>
                     <ChartCard
-                        title="Props API Pipeline"
-                        subtitle="Frontend telemetry → snapshot → privacy transform → deterministic recommendation → signed ARB"
+                        title="Analysis Summary"
+                        subtitle="Local telemetry to reduced request, analysis, and signed result"
                         darkMode={darkMode}
                         right={
                             <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
@@ -1004,14 +1004,14 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                                     background: propsSummary.verifyOk ? 'rgba(34,197,94,0.16)' : 'rgba(148,163,184,0.18)',
                                     color: propsSummary.verifyOk ? '#22c55e' : 'var(--text-secondary)',
                                 }}>
-                                {propsSummary.verifyOk ? 'ARB Verified' : 'Not Verified'}
+                                {propsSummary.verifyOk ? 'Verified' : 'Not verified'}
                             </span>
                         }
                     >
                         {!recommendApiResult ? (
                             <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                                Run <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Props Pipeline</span> after
-                                fetching data to generate signed recommendations.
+                                Run <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Analysis</span> after
+                                fetching data to generate verified recommendations.
                             </div>
                         ) : (
                             <div className="space-y-4">
@@ -1782,3 +1782,4 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
 };
 
 export default GraphAnalysisPage;
+

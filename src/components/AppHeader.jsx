@@ -17,7 +17,7 @@ const AppHeader = ({ nodeInfo, nodeChannelsCount, peersCount, onShowPeers }) => 
           <div>
             <h1 className="text-2xl md:text-3xl font-semibold font-display">LN Advisor</h1>
             <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
-              Lightning network intelligence for LNC-enabled nodes
+              Lightning node analysis and recommendations
             </p>
           </div>
         </div>

@@ -162,28 +162,27 @@ const DemoGraphAnalysis = ({ darkMode, onConnect }) => {
         <div className="max-w-2xl">
           <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--text-secondary)' }}>
             <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(14,165,164,0.14)', color: 'var(--accent-1)' }}>
-              Public Graph
+              Graph Data
             </span>
             <span className="px-2.5 py-1 rounded-full" style={{ background: 'rgba(37,99,235,0.16)', color: 'var(--accent-2)' }}>
-              Private Telemetry
+              Node Data
             </span>
             <span className="px-2.5 py-1 rounded-full" style={{ background: 'var(--badge-bg)', color: 'var(--text-secondary)' }}>
-              Attested Output
+              Verified Results
             </span>
           </div>
           <h2 className="text-3xl md:text-4xl font-semibold font-display mt-3" style={{ color: 'var(--text-primary)' }}>
-            LN Prop Advisor Preview
+            LN Advisor Preview
           </h2>
           <p className="text-sm mt-3" style={{ color: 'var(--text-secondary)' }}>
-            A privacy-preserving intelligence layer for Lightning node operators. This preview simulates the dashboard
-            you unlock after connecting via LNC, combining public graph context with private routing telemetry.
+            Preview the dashboard after connecting your node. It combines graph data, node activity, and verified results.
           </p>
           <div className="grid sm:grid-cols-2 gap-3 mt-5 text-sm">
             {[
-              'Channel recommendations powered by Props + ML scoring',
-              'Fee strategy tuning using forwarding and mission control signals',
-              'Peer reliability and liquidity pressure detection',
-              'Attested recommendation bundles with provenance',
+              'Channel recommendations for fee and liquidity review',
+              'Opening recommendations from graph and routing signals',
+              'Peer reliability and liquidity context',
+              'Request review and verification details',
             ].map((item) => (
               <div key={item} className="flex items-start gap-2">
                 <span className="mt-1 h-2 w-2 rounded-full" style={{ background: 'var(--accent-1)' }} />

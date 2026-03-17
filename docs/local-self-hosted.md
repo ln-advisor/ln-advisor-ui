@@ -18,7 +18,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8787
 API_PORT=8787
 ```
 
-The verified Phala app URL is built into the frontend configuration. You do not need to add it here.
+The verified service URL is built into the frontend configuration. You do not need to add it here.
 
 ## Optional values for browser LNC login
 
@@ -59,7 +59,7 @@ pnpm api
 
 ## Verified pages
 
-The verified Phala path is available in:
+The verified route is available in:
 
 1. `Channels`
 2. `Opening Recommendations`
@@ -67,8 +67,8 @@ The verified Phala path is available in:
 Each verified run follows the same interaction:
 
 1. open the page
-2. choose `Verified Phala`
-3. click `Review & Send`
+2. choose `Verified`
+3. click `Review Request`
 4. review the request body
-5. click `Send to Phala`
+5. click `Send Request`
 6. inspect the result
