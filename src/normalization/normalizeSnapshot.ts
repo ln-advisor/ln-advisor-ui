@@ -1,5 +1,6 @@
 import type { LightningSnapshot, NumericLike } from "../connectors/types";
 import type {
+  ChannelFlowType,
   NormalizedChannelState,
   NormalizedNodeState,
   NormalizedPeerAggregate,
@@ -10,6 +11,7 @@ interface ChannelAccumulator {
   forwardCountIn: number;
   forwardCountOut: number;
   revenueSat: number;
+  volumeInSat: number;
   volumeOutSat: number;
   failedForwardCount: number;
   lastActivityTimestamp: number | null;
@@ -70,6 +72,7 @@ const ensureChannelAccumulator = (
       forwardCountIn: 0,
       forwardCountOut: 0,
       revenueSat: 0,
+      volumeInSat: 0,
       volumeOutSat: 0,
       failedForwardCount: 0,
       lastActivityTimestamp: null,
@@ -85,11 +88,14 @@ const buildForwardingStats = (snapshot: LightningSnapshot): Map<string, ChannelA
     const channelIn = String(event.chanIdIn || "").trim();
     const channelOut = String(event.chanIdOut || "").trim();
     const feeSat = toNumber(event.fee);
+    const amtIn = toNumber(event.amtIn);
+    const amtOut = toNumber(event.amtOut);
     const ts = toTimestampSeconds(event.timestampNs, event.timestamp);
 
     if (channelIn) {
       const accIn = ensureChannelAccumulator(channelStats, channelIn);
       accIn.forwardCountIn += 1;
+      accIn.volumeInSat += amtIn;
       accIn.lastActivityTimestamp = updateActivity(accIn.lastActivityTimestamp, ts);
     }
 
@@ -97,7 +103,7 @@ const buildForwardingStats = (snapshot: LightningSnapshot): Map<string, ChannelA
       const accOut = ensureChannelAccumulator(channelStats, channelOut);
       accOut.forwardCountOut += 1;
       accOut.revenueSat += feeSat;
-      accOut.volumeOutSat += toNumber(event.amtOut);
+      accOut.volumeOutSat += amtOut;
       accOut.lastActivityTimestamp = updateActivity(accOut.lastActivityTimestamp, ts);
     }
   }
@@ -235,6 +241,7 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         forwardCountIn: 0,
         forwardCountOut: 0,
         revenueSat: 0,
+        volumeInSat: 0,
         volumeOutSat: 0,
         failedForwardCount: 0,
         lastActivityTimestamp: null,
@@ -249,6 +256,33 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         lastFailTimestamp: null,
       };
       const missionTotal = mission.successCount + mission.failCount;
+
+      // ── Cycles / Liquidity Sufficiency metrics ────────────────────────────
+      const volumeInSat = stats.volumeInSat;
+      const volumeOutSat = stats.volumeOutSat;
+      const netFlowSat = volumeInSat - volumeOutSat;
+      const hasFlow = volumeInSat > 0 || volumeOutSat > 0;
+      const circularityRatio = hasFlow
+        ? roundFixed(Math.min(volumeInSat, volumeOutSat) / Math.max(volumeInSat, volumeOutSat), 6)
+        : null;
+      // Daily drain rate: netFlow is per-window; we need a window duration in days.
+      // Since the window length is not carried through here, we express runway relative
+      // to the window itself using the local balance divided by the absolute daily outflow.
+      // (Runway = localBalance / netOutflowPerWindow) expressed in "windows" but labelled as
+      // approx days if the window is roughly 7–30 days – a reasonable approximation.
+      const netOutflow = -netFlowSat; // positive when draining
+      const liquidityRunwayDays =
+        netOutflow > 0 && localBalanceSat > 0
+          ? roundFixed(localBalanceSat / netOutflow, 2)
+          : null;
+      const circScore = circularityRatio ?? 0;
+      const flowType: ChannelFlowType = !hasFlow
+        ? 'Idle'
+        : circScore >= 0.75
+        ? 'Balanced'
+        : netFlowSat > 0
+        ? 'Source'
+        : 'Drain';
 
       return {
         channelId,
@@ -278,6 +312,13 @@ export function normalizeSnapshot(snapshot: LightningSnapshot): NormalizedNodeSt
         missionLastFailTimestamp: mission.lastFailTimestamp,
         networkInAvg: (channel as any).networkInAvg ?? null,
         networkOutAvg: (channel as any).networkOutAvg ?? null,
+        // Cycles metrics
+        volumeInSat,
+        volumeOutSat,
+        netFlowSat,
+        circularityRatio,
+        liquidityRunwayDays,
+        flowType,
       };
     })
     .sort((a, b) => compareText(a.channelId, b.channelId));

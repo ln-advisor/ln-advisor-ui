@@ -1,3 +1,5 @@
+export type ChannelFlowType = 'Drain' | 'Source' | 'Balanced' | 'Idle';
+
 export interface NormalizedChannelState {
   channelId: string;
   remotePubkey: string;
@@ -23,6 +25,26 @@ export interface NormalizedChannelState {
   missionLastFailTimestamp: number | null;
   networkInAvg: number | null;
   networkOutAvg: number | null;
+  // --- Cycles / Liquidity Sufficiency ---
+  /** Total volume routed IN through this channel during the snapshot window (sats) */
+  volumeInSat: number;
+  /** Total volume routed OUT through this channel during the snapshot window (sats) */
+  volumeOutSat: number;
+  /** Net flow = volumeInSat - volumeOutSat. Negative means more sats left than returned. */
+  netFlowSat: number;
+  /**
+   * Circularity ratio in [0, 1].
+   * 1 = perfectly balanced (same volume in and out).
+   * 0 = completely one-directional.
+   */
+  circularityRatio: number | null;
+  /**
+   * Liquidity runway in days: how many days at the current net-outflow rate
+   * before local balance is exhausted. Null if netFlow >= 0 (no drain).
+   */
+  liquidityRunwayDays: number | null;
+  /** Qualitative flow classification based on the observed circularity. */
+  flowType: ChannelFlowType;
 }
 
 export interface NormalizedPeerAggregate {

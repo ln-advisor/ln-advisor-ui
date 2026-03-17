@@ -790,6 +790,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         };
     }, [recommendApiResult, verifyApiResult]);
 
+
     const runAnalysisPipeline = useCallback(async () => {
         if (!graph) {
             setPropsError('Fetch data first, then run the analysis pipeline.');
