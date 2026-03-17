@@ -1,17 +1,30 @@
 # Verification Reference
 
-## Where to inspect outgoing data
+## Review before send
 
-Open a channel on the `Channels` page and run `Analyze Channel`.
+On verified pages, click:
 
-Then expand:
+- `Review & Send`
+
+Before any request is sent, the modal shows:
+- route
+- transport
+- planned requests
+- exact primary request body
+- request size in bytes
+
+Use:
+- `Cancel` to stop
+- `Send to Phala` to continue
+
+## Where to inspect outgoing data after a run
+
+Expand:
 
 - `PROPS Pipeline Explorer`
 
-The relevant sections are:
-
 ### Stage 1: Raw
-- local channel context used for the run
+- local input counts and extracted data used for the run
 
 ### Stage 2: Normalized
 - normalized intermediate state

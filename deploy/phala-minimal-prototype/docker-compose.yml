@@ -464,6 +464,66 @@ services:
         
         const classifyFailedForwardPressure = (failedForwardCount) => (failedForwardCount > 0 ? "HIGH" : "LOW");
         
+        const percentile = (sortedValues, quantile) => {
+          if (!Array.isArray(sortedValues) || sortedValues.length === 0) return 0;
+          if (sortedValues.length === 1) return sortedValues[0];
+          const position = (sortedValues.length - 1) * quantile;
+          const lower = Math.floor(position);
+          const upper = Math.ceil(position);
+          if (lower === upper) return sortedValues[lower];
+          const weight = position - lower;
+          return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+        };
+        
+        const buildPotentialCentralityThresholds = (potentialPeers) => {
+          const values = (Array.isArray(potentialPeers) ? potentialPeers : [])
+            .map((peer) => (peer?.betweennessCentrality === null || peer?.betweennessCentrality === undefined
+              ? null
+              : Number(peer.betweennessCentrality)))
+            .filter((value) => Number.isFinite(value))
+            .sort((a, b) => a - b);
+        
+          return {
+            p33: percentile(values, 1 / 3),
+            p66: percentile(values, 2 / 3),
+          };
+        };
+        
+        const classifyCentralityBand = (centrality, thresholds) => {
+          if (centrality === null || centrality === undefined) return "MEDIUM";
+          if (centrality <= thresholds.p33) return "LOW";
+          if (centrality <= thresholds.p66) return "MEDIUM";
+          return "HIGH";
+        };
+        
+        const classifyMissionReliabilityBand = (successRate, failureRate) => {
+          if (successRate === null && failureRate === null) return "MEDIUM";
+          const success = successRate ?? 0;
+          const fail = failureRate ?? 0;
+          const score = success - fail;
+          if (score < -0.2) return "LOW";
+          if (score < 0.2) return "MEDIUM";
+          return "HIGH";
+        };
+        
+        const classifyCapacityBand = (capacitySat) => {
+          if (capacitySat > 10_000_000) return "HIGH";
+          if (capacitySat > 1_000_000) return "MEDIUM";
+          return "LOW";
+        };
+        
+        const normalizeNullableNumber = (value) => {
+          if (value === null || value === undefined || value === "") return null;
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? parsed : null;
+        };
+        
+        const isFeatureOnlyNodeState = (value) =>
+          Boolean(value) &&
+          typeof value === "object" &&
+          value.privacyMode === "feature_only" &&
+          Array.isArray(value.channels);
+        
         const runtimeState = {
           lastArbDigest: null,
         };
@@ -517,6 +577,101 @@ services:
         };
         
         const toFeatureOnly = (telemetry) => {
+          if (isFeatureOnlyNodeState(telemetry)) {
+            const channels = [...telemetry.channels]
+              .map((channel, index) => ({
+                channelRef: String(channel?.channelRef || makeRef("channel", index)),
+                peerRef: String(channel?.peerRef || makeRef("peer", index)),
+                active: Boolean(channel?.active),
+                localBalanceRatio: roundFixed(Number(channel?.localBalanceRatio || 0), 6),
+                remoteBalanceRatio: roundFixed(Number(channel?.remoteBalanceRatio || 0), 6),
+                outboundFeePpm: normalizeNullableNumber(channel?.outboundFeePpm),
+                forwardCount:
+                  Number(
+                    channel?.forwardCount ??
+                      channel?.forwardCountTotal ??
+                      (Number(channel?.forwardCountIn || 0) + Number(channel?.forwardCountOut || 0))
+                  ) || 0,
+                revenueSat: Number(channel?.revenueSat || 0),
+                failedForwardCount: Number(channel?.failedForwardCount || 0),
+                peerBetweennessCentrality: normalizeNullableNumber(channel?.peerBetweennessCentrality),
+                missionSuccessRate: normalizeNullableNumber(channel?.missionSuccessRate),
+                missionFailureRate: normalizeNullableNumber(channel?.missionFailureRate),
+              }))
+              .sort((left, right) => compareText(left.channelRef, right.channelRef));
+        
+            const peers = [...(Array.isArray(telemetry.peers) ? telemetry.peers : [])]
+              .map((peer, index) => ({
+                peerRef: String(peer?.peerRef || makeRef("peer", index)),
+                channelCount: Number(peer?.channelCount || 0),
+                activeChannelCount: Number(peer?.activeChannelCount || 0),
+                avgLocalBalanceRatio: roundFixed(Number(peer?.avgLocalBalanceRatio || 0), 6),
+                avgRemoteBalanceRatio: roundFixed(Number(peer?.avgRemoteBalanceRatio || 0), 6),
+                avgOutboundFeePpm: normalizeNullableNumber(peer?.avgOutboundFeePpm),
+                totalForwardCount: Number(peer?.totalForwardCount || 0),
+                totalRevenueSat: Number(peer?.totalRevenueSat || 0),
+                totalFailedForwardCount: Number(peer?.totalFailedForwardCount || 0),
+                lastActivityTimestamp: normalizeNullableNumber(peer?.lastActivityTimestamp),
+                avgPeerBetweennessCentrality: normalizeNullableNumber(peer?.avgPeerBetweennessCentrality),
+                missionPairCount: Number(peer?.missionPairCount || 0),
+                missionSuccessRate: normalizeNullableNumber(peer?.missionSuccessRate),
+                missionFailureRate: normalizeNullableNumber(peer?.missionFailureRate),
+              }))
+              .sort((left, right) => compareText(left.peerRef, right.peerRef));
+        
+            const potentialPeers = [...(Array.isArray(telemetry.potentialPeers) ? telemetry.potentialPeers : [])]
+              .map((peer, index) => ({
+                peerRef: String(peer?.peerRef || makeRef("peer", peers.length + index)),
+                capacitySat: Number(peer?.capacitySat || 0),
+                channelCount: Number(peer?.channelCount || 0),
+                betweennessCentrality: normalizeNullableNumber(peer?.betweennessCentrality),
+                missionSuccessRate: normalizeNullableNumber(peer?.missionSuccessRate),
+                missionFailureRate: normalizeNullableNumber(peer?.missionFailureRate),
+                lastActivityTimestamp: normalizeNullableNumber(peer?.lastActivityTimestamp),
+              }))
+              .sort((left, right) => compareText(left.peerRef, right.peerRef));
+        
+            const totals = isRecord(telemetry.totals)
+              ? {
+                  forwardCount: Number(telemetry.totals.forwardCount || 0),
+                  revenueSat: Number(telemetry.totals.revenueSat || 0),
+                  failedForwardCount: Number(telemetry.totals.failedForwardCount || 0),
+                  avgLocalBalanceRatio: roundFixed(Number(telemetry.totals.avgLocalBalanceRatio || 0), 6),
+                  avgRemoteBalanceRatio: roundFixed(Number(telemetry.totals.avgRemoteBalanceRatio || 0), 6),
+                  missionPairCount: Number(telemetry.totals.missionPairCount || 0),
+                  missionPairsWithSignals: Number(telemetry.totals.missionPairsWithSignals || 0),
+                  centralityPeerCount: Number(telemetry.totals.centralityPeerCount || 0),
+                }
+              : {
+                  forwardCount: channels.reduce((sum, channel) => sum + channel.forwardCount, 0),
+                  revenueSat: channels.reduce((sum, channel) => sum + channel.revenueSat, 0),
+                  failedForwardCount: channels.reduce((sum, channel) => sum + channel.failedForwardCount, 0),
+                  avgLocalBalanceRatio:
+                    channels.length > 0
+                      ? roundFixed(channels.reduce((sum, channel) => sum + channel.localBalanceRatio, 0) / channels.length, 6)
+                      : 0,
+                  avgRemoteBalanceRatio:
+                    channels.length > 0
+                      ? roundFixed(channels.reduce((sum, channel) => sum + channel.remoteBalanceRatio, 0) / channels.length, 6)
+                      : 0,
+                  missionPairCount: peers.reduce((sum, peer) => sum + Number(peer.missionPairCount || 0), 0),
+                  missionPairsWithSignals: peers.filter((peer) => peer.missionSuccessRate !== null || peer.missionFailureRate !== null).length,
+                  centralityPeerCount: potentialPeers.filter((peer) => peer.betweennessCentrality !== null).length,
+                };
+        
+            return {
+              schemaVersion: String(telemetry.schemaVersion || "privacy-node-state-v1"),
+              privacyMode: "feature_only",
+              sourceSchemaVersion: String(telemetry.sourceSchemaVersion || "privacy-node-state-v1"),
+              nodeAlias: String(telemetry.nodeAlias || "prototype-node"),
+              channelCount: Number(telemetry.channelCount || channels.length),
+              channels,
+              peers,
+              potentialPeers,
+              totals,
+            };
+          }
+        
           const normalized = normalizeTelemetry(telemetry);
           return {
             schemaVersion: "prototype-privacy-node-state-v1",
@@ -525,6 +680,30 @@ services:
             nodeAlias: normalized.nodeAlias,
             channelCount: normalized.channels.length,
             channels: normalized.channels,
+            peers: [],
+            potentialPeers: [],
+            totals: {
+              forwardCount: normalized.channels.reduce((sum, channel) => sum + channel.forwardCount, 0),
+              revenueSat: normalized.channels.reduce((sum, channel) => sum + channel.revenueSat, 0),
+              failedForwardCount: normalized.channels.reduce((sum, channel) => sum + channel.failedForwardCount, 0),
+              avgLocalBalanceRatio:
+                normalized.channels.length > 0
+                  ? roundFixed(
+                      normalized.channels.reduce((sum, channel) => sum + channel.localBalanceRatio, 0) / normalized.channels.length,
+                      6
+                    )
+                  : 0,
+              avgRemoteBalanceRatio:
+                normalized.channels.length > 0
+                  ? roundFixed(
+                      normalized.channels.reduce((sum, channel) => sum + channel.remoteBalanceRatio, 0) / normalized.channels.length,
+                      6
+                    )
+                  : 0,
+              missionPairCount: 0,
+              missionPairsWithSignals: 0,
+              centralityPeerCount: 0,
+            },
           };
         };
         
@@ -882,9 +1061,57 @@ services:
           };
         };
         
+        const buildChannelOpeningRecommendation = (potentialPeer, centralityThresholds) => {
+          const reasons = [];
+          const centralityBand = classifyCentralityBand(potentialPeer.betweennessCentrality, centralityThresholds);
+          const reliabilityBand = classifyMissionReliabilityBand(
+            potentialPeer.missionSuccessRate,
+            potentialPeer.missionFailureRate
+          );
+          const capacityBand = classifyCapacityBand(Number(potentialPeer.capacitySat || 0));
+        
+          const bc = potentialPeer.betweennessCentrality ?? 0;
+          const capacityBtc = Math.max(1, Number(potentialPeer.capacitySat || 0) / 100_000_000);
+          const reliabilityWeight =
+            reliabilityBand === "HIGH" ? 1.5 : reliabilityBand === "LOW" ? 0.5 : 1.0;
+          const rawScore = (bc / capacityBtc) * reliabilityWeight;
+          const score = roundFixed(rawScore * 1000, 3);
+        
+          if (centralityBand === "HIGH") reasons.push("high_network_centrality");
+          if (reliabilityBand === "HIGH") reasons.push("proven_routing_reliability");
+          if (capacityBand === "LOW" && Number(potentialPeer.channelCount || 0) > 5) {
+            reasons.push("altruistic_liquidity_gap");
+          }
+          if (Number(potentialPeer.channelCount || 0) > 50) reasons.push("well_connected_hub");
+        
+          return {
+            peerRef: potentialPeer.peerRef,
+            score,
+            confidence: roundFixed(Math.min(1, rawScore * 2), 3),
+            signals: {
+              centralityBand,
+              reliabilityBand,
+              capacityBand,
+              channelCount: Number(potentialPeer.channelCount || 0),
+            },
+            reasons: reasons.sort(compareText),
+          };
+        };
+        
         const scorePrototypeRecommendations = (telemetry) => {
           const transformedSnapshot = toFeatureOnly(telemetry);
           const feeRecommendations = transformedSnapshot.channels.map(buildFeeRecommendation);
+          const channelOpeningRecommendations = (Array.isArray(transformedSnapshot.potentialPeers)
+            ? transformedSnapshot.potentialPeers
+            : [])
+            .map((peer) =>
+              buildChannelOpeningRecommendation(
+                peer,
+                buildPotentialCentralityThresholds(transformedSnapshot.potentialPeers)
+              )
+            )
+            .sort((left, right) => right.score - left.score)
+            .slice(0, 10);
         
           return {
             modelVersion: "prototype-fee-forward-v1",
@@ -892,10 +1119,12 @@ services:
             recommendationSet: {
               schemaVersion: "prototype-recommendations-v1",
               feeRecommendations,
+              channelOpeningRecommendations,
               summary: {
                 raiseCount: feeRecommendations.filter((item) => item.action === "raise").length,
                 lowerCount: feeRecommendations.filter((item) => item.action === "lower").length,
                 holdCount: feeRecommendations.filter((item) => item.action === "hold").length,
+                openingCount: channelOpeningRecommendations.length,
               },
             },
           };

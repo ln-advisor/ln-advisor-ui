@@ -1,17 +1,27 @@
 # Docs Index
 
-## Use the app
+## Setup
 
 1. [local-self-hosted.md](./local-self-hosted.md)
    - local startup
    - required env values
-   - frontend-only vs full local app
+   - frontend and API commands
 
-2. [verification-reference.md](./verification-reference.md)
-   - where to inspect outgoing data
-   - what the verification fields in the UI mean
+## Verified flows
 
-3. [channels-phala-verified.md](./channels-phala-verified.md)
-   - exact `Channels` verified flow
-   - request sequence
-   - UI sections to check
+2. [channels-phala-verified.md](./channels-phala-verified.md)
+   - `Channels` verified flow
+   - review-before-send
+   - verification panel
+
+3. [opening-recs-phala-verified.md](./opening-recs-phala-verified.md)
+   - `Opening Recommendations` verified flow
+   - review-before-send
+   - candidate peer results
+
+## Reference
+
+4. [verification-reference.md](./verification-reference.md)
+   - payload review
+   - request inspector
+   - verification panel fields

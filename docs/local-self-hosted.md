@@ -1,15 +1,5 @@
 # Local Self-Hosted Setup
 
-## Two run modes
-
-### 1. Verified Channels only
-
-Use this when you only need the verified `Channels` flow.
-
-### 2. Full local app
-
-Use this when you also need the standard/local pages and routes.
-
 ## Required values
 
 Create:
@@ -28,7 +18,9 @@ VITE_API_BASE_URL=http://127.0.0.1:8787
 API_PORT=8787
 ```
 
-## Optional values for the browser LNC path
+The verified Phala app URL is built into the frontend configuration. You do not need to add it here.
+
+## Optional values for browser LNC login
 
 Leave these empty if you connect through the UI:
 
@@ -45,9 +37,7 @@ Install dependencies:
 pnpm install
 ```
 
-### Option A: verified Channels path only
-
-Start the frontend:
+## Start the frontend
 
 ```bash
 pnpm dev --host
@@ -59,42 +49,26 @@ Open:
 http://localhost:5173
 ```
 
-Then:
-1. connect your node through the UI
-2. go to `Channels`
-3. open a channel
-4. choose `Verified Phala`
-5. click `Analyze Channel`
-6. inspect:
-   - `Stage 3: PROPS Final Payload`
-   - `Stage 4: Outgoing Browser Requests`
+## Start the local API
 
-### Option B: full local app
-
-In one terminal:
+Start the local API only if you need the standard/local routes:
 
 ```bash
 pnpm api
 ```
 
-In a second terminal:
+## Verified pages
 
-```bash
-pnpm dev --host
-```
+The verified Phala path is available in:
 
-## What to inspect in the UI
+1. `Channels`
+2. `Opening Recommendations`
 
-1. `PROPS Pipeline Explorer`
-   - `Stage 1: Raw`
-   - `Stage 2: Normalized`
-   - `Stage 3: PROPS Final Payload`
-   - `Stage 4: Outgoing Browser Requests`
+Each verified run follows the same interaction:
 
-2. `Phala Trust Status`
-   - signer
-   - signer type
-   - quote check
-   - measurement
-   - attestation source
-   - live evidence requirement
+1. open the page
+2. choose `Verified Phala`
+3. click `Review & Send`
+4. review the request body
+5. click `Send to Phala`
+6. inspect the result

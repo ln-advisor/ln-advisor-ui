@@ -362,8 +362,11 @@ function App() {
                     path="/channels"
                     element={<ChannelsPage lnc={null} darkMode={darkMode} nodeChannels={mockChannels} mockSnapshot={mockSnapshot} />}
                   />
+                  <Route
+                    path="/recommendations"
+                    element={<RecommendationsPage lnc={null} darkMode={darkMode} mockSnapshot={mockSnapshot} />}
+                  />
                   <Route path="/graph" element={<Navigate to="/channels" replace />} />
-                  <Route path="/recommendations" element={<Navigate to="/channels" replace />} />
                   <Route path="*" element={<Navigate to="/channels" replace />} />
                 </Routes>
 

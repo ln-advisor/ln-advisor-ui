@@ -1,11 +1,11 @@
-# Channels Verified Phala Flow
+# Opening Recommendations Verified Phala Flow
 
 ## Use the page
 
 1. connect your node in the browser
-2. open `Channels`
-3. click a channel row
-4. in `Props Advisor`, choose `Verified Phala`
+2. open `Opening Recommendations`
+3. click `Sync Graph Data`
+4. choose `Verified Phala`
 5. click `Review & Send`
 6. review the request body
 7. click `Send to Phala`
@@ -13,9 +13,8 @@
 ## Result sections
 
 After a successful run, the page shows:
-- suggested fee action
-- target fee rate
-- model confidence
+- candidate peer cards
+- score and reasons
 - `Phala Trust Status`
 - `PROPS Pipeline Explorer`
 
@@ -51,10 +50,10 @@ Use:
 ## Pipeline Explorer
 
 ### Stage 1: Raw
-- local channel data for the selected run
+- local graph and mission-control counts used for the run
 
 ### Stage 2: Normalized
-- structured local intermediate state
+- structured node state with candidate peers
 
 ### Stage 3: PROPS Final Payload
 - reduced payload prepared for the verified run
@@ -71,6 +70,6 @@ After a successful verified run, the UI shows:
 - signer
 - signer type
 - quote check
-- measurement status
+- measurement
 - attestation source
-- live evidence policy
+- live evidence
