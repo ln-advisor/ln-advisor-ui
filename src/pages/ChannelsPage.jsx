@@ -163,8 +163,9 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
     const [showPayload, setShowPayload] = useState(false);
     const [lastTelemetry, setLastTelemetry] = useState(null);
     const [verifyResult, setVerifyResult] = useState(null);
-    const [analysisMode, setAnalysisMode] = useState(() => (PHALA_UI_CONFIG.available && mockSnapshot ? 'phala_verified' : 'standard'));
+    const [analysisMode, setAnalysisMode] = useState(() => (PHALA_UI_CONFIG.available ? 'phala_verified' : 'standard'));
     const [phalaRun, setPhalaRun] = useState(null);
+    const [verifiedReviewCompleted, setVerifiedReviewCompleted] = useState(false);
     const [nodeInfo, setNodeInfo] = useState(null);
     const [nodePubkey, setNodePubkey] = useState(null);
     const [peers, setPeers] = useState([]);
@@ -689,6 +690,46 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         };
     };
 
+    const executePreparedPhalaChannelRun = async (preparedReview) => {
+        if (!preparedReview) return;
+
+        try {
+            setPropsLoading(true);
+            setPropsError(null);
+            const phalaResponse = await runPhalaVerifiedRecommendation(preparedReview.phalaTelemetry);
+            const recommendation = extractFeeRecommendation(phalaResponse.recommend);
+
+            if (!recommendation) {
+                throw new Error('Verified run returned no fee recommendation for the selected channel.');
+            }
+
+            setPropsRecommendation(recommendation);
+            setVerifyResult(phalaResponse.verify);
+            setPhalaRun(phalaResponse);
+            setVerifiedReviewCompleted(true);
+            setPipelineData((previous) => ({
+                ...previous,
+                outgoingInspector: buildOutgoingInspector({
+                    mode: 'phala_verified',
+                    propsPayload: preparedReview.propsSnapshot,
+                    phalaTelemetry: preparedReview.phalaTelemetry,
+                    phalaResponse,
+                    networkInAvgPpm: preparedReview.networkInAvgPpm,
+                    networkOutAvgPpm: preparedReview.networkOutAvgPpm,
+                }),
+            }));
+            setPendingPhalaReview(null);
+        } catch (err) {
+            console.error('Analysis failed:', err);
+            setPropsRecommendation(null);
+            setVerifyResult(null);
+            setPhalaRun(null);
+            setPropsError(err?.message || 'Analysis failed.');
+        } finally {
+            setPropsLoading(false);
+        }
+    };
+
     const handleRunChannelAnalysis = async () => {
         if (!lnc?.lnd?.lightning && !isMockMode) {
             setPropsError('A Lightning connection or mock data is required before running analysis.');
@@ -701,7 +742,6 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         }
 
         try {
-            setPropsLoading(true);
             setPropsError(null);
             setError(null);
             setPropsRecommendation(null);
@@ -734,7 +774,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             });
 
             if (activeAnalysisMode === 'phala_verified') {
-                setPendingPhalaReview({
+                const preparedReview = {
                     propsSnapshot,
                     phalaTelemetry,
                     outgoingInspector: buildOutgoingInspector({
@@ -746,10 +786,17 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                     }),
                     networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
                     networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
-                });
+                };
+
+                if (verifiedReviewCompleted) {
+                    await executePreparedPhalaChannelRun(preparedReview);
+                } else {
+                    setPendingPhalaReview(preparedReview);
+                }
                 return;
             }
 
+            setPropsLoading(true);
             const res = await postFeeSuggestion({
                 propsPayload: propsSnapshot,
                 peerFeeContext: {
@@ -797,42 +844,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
 
     const handleConfirmPhalaReview = async () => {
         if (!pendingPhalaReview) return;
-        const preparedReview = pendingPhalaReview;
-
-        try {
-            setPropsLoading(true);
-            setPropsError(null);
-            const phalaResponse = await runPhalaVerifiedRecommendation(preparedReview.phalaTelemetry);
-            const recommendation = extractFeeRecommendation(phalaResponse.recommend);
-
-            if (!recommendation) {
-                throw new Error('Verified run returned no fee recommendation for the selected channel.');
-            }
-
-            setPropsRecommendation(recommendation);
-            setVerifyResult(phalaResponse.verify);
-            setPhalaRun(phalaResponse);
-            setPipelineData((previous) => ({
-                ...previous,
-                outgoingInspector: buildOutgoingInspector({
-                    mode: 'phala_verified',
-                    propsPayload: preparedReview.propsSnapshot,
-                    phalaTelemetry: preparedReview.phalaTelemetry,
-                    phalaResponse,
-                    networkInAvgPpm: preparedReview.networkInAvgPpm,
-                    networkOutAvgPpm: preparedReview.networkOutAvgPpm,
-                }),
-            }));
-            setPendingPhalaReview(null);
-        } catch (err) {
-            console.error('Analysis failed:', err);
-            setPropsRecommendation(null);
-            setVerifyResult(null);
-            setPhalaRun(null);
-            setPropsError(err?.message || 'Analysis failed.');
-        } finally {
-            setPropsLoading(false);
-        }
+        await executePreparedPhalaChannelRun(pendingPhalaReview);
     };
 
     const handleCloseFeeModal = () => {
@@ -841,6 +853,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         setGeminiLoading(false);
         setPhalaRun(null);
         setPendingPhalaReview(null);
+        setPropsError(null);
     };
 
     // ── Shared styles ──────────────────────────────────────────────────────────
@@ -1736,20 +1749,65 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                             )}
                                         </div>
                                     )}
-                                    <button
-                                        onClick={handleRunChannelAnalysis}
-                                        disabled={propsLoading}
-                                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-md ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
-                                        style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
-                                    >
-                                        {propsLoading
-                                            ? (activeAnalysisMode === 'phala_verified' ? 'Running verified analysis...' : 'Running analysis...')
-                                            : activeAnalysisMode === 'phala_verified'
-                                                ? 'Review Request'
-                                                : propsRecommendation
-                                                    ? 'Re-run Analysis'
-                                                    : 'Analyze Channel'}
-                                    </button>
+                                    <div className="flex flex-col items-end gap-2">
+                                        <div className="flex items-center gap-2">
+                                            {activeAnalysisMode === 'phala_verified' && verifiedReviewCompleted && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const {
+                                                            propsSnapshot,
+                                                            phalaTelemetry,
+                                                        } = buildSelectedChannelAnalysisInputs();
+
+                                                        setPendingPhalaReview({
+                                                            propsSnapshot,
+                                                            phalaTelemetry,
+                                                            outgoingInspector: buildOutgoingInspector({
+                                                                mode: 'phala_verified',
+                                                                propsPayload: propsSnapshot,
+                                                                phalaTelemetry,
+                                                                networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                                                                networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                                                            }),
+                                                            networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                                                            networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                                                        });
+                                                    }}
+                                                    disabled={propsLoading}
+                                                    className={`px-3 py-2 rounded-lg text-[11px] font-bold transition-all ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'}`}
+                                                    style={{
+                                                        border: `1px solid ${darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)'}`,
+                                                        color: 'var(--text-primary)',
+                                                        backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.65)',
+                                                    }}
+                                                >
+                                                    Review Request
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={handleRunChannelAnalysis}
+                                                disabled={propsLoading}
+                                                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-md ${propsLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
+                                                style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
+                                            >
+                                                {propsLoading
+                                                    ? (activeAnalysisMode === 'phala_verified' ? 'Running verified analysis...' : 'Running analysis...')
+                                                    : activeAnalysisMode === 'phala_verified'
+                                                        ? (verifiedReviewCompleted ? 'Run Verified' : 'Review Request')
+                                                        : propsRecommendation
+                                                            ? 'Re-run Analysis'
+                                                            : 'Analyze Channel'}
+                                            </button>
+                                        </div>
+                                        {activeAnalysisMode === 'phala_verified' && (
+                                            <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                                                {verifiedReviewCompleted
+                                                    ? 'Run Verified sends immediately. Review Request reopens the payload preview.'
+                                                    : 'The first verified run opens a request review before sending.'}
+                                            </span>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 

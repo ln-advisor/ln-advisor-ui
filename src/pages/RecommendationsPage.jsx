@@ -124,7 +124,7 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
   const isMockMode = !lnc?.lnd?.lightning && Boolean(mockSnapshot);
   const phalaModeEnabled = PHALA_UI_CONFIG.enabled;
   const phalaModeAvailable = PHALA_UI_CONFIG.available;
-  const [analysisMode, setAnalysisMode] = useState(() => (PHALA_UI_CONFIG.available && mockSnapshot ? 'phala_verified' : 'standard'));
+  const [analysisMode, setAnalysisMode] = useState(() => (PHALA_UI_CONFIG.available ? 'phala_verified' : 'standard'));
   const activeAnalysisMode = isMockMode && phalaModeAvailable ? 'phala_verified' : (phalaModeAvailable && analysisMode === 'phala_verified' ? 'phala_verified' : 'standard');
 
   const [isLoading, setIsLoading] = useState(false);
@@ -141,6 +141,7 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
   const [verifyResult, setVerifyResult] = useState(null);
   const [phalaRun, setPhalaRun] = useState(null);
   const [pendingPhalaReview, setPendingPhalaReview] = useState(null);
+  const [verifiedReviewCompleted, setVerifiedReviewCompleted] = useState(false);
   const [showPipeline, setShowPipeline] = useState(false);
   const [pipelineData, setPipelineData] = useState({ rawMetadata: null, normalizedMetadata: null, propsPayload: null, outgoingInspector: null });
   const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', data: null });
@@ -185,6 +186,7 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
       setRecommendations(mapped);
       setVerifyResult(phalaResponse.verify);
       setPhalaRun(phalaResponse);
+      setVerifiedReviewCompleted(true);
       setPipelineData((prev) => ({ ...prev, outgoingInspector: buildOutgoingInspector({ mode: 'phala_verified', propsPayload: preparedRun.propsPayload, phalaResponse }) }));
       setPendingPhalaReview(null);
     } catch (err) {
@@ -242,7 +244,6 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
       return;
     }
 
-    setAdvisorLoading(true);
     setAdvisorError(null);
     setVerifyResult(null);
     setPhalaRun(null);
@@ -295,12 +296,19 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
       setPipelineData({ rawMetadata, normalizedMetadata: normalizedSnapshot, propsPayload, outgoingInspector: buildOutgoingInspector({ mode: activeAnalysisMode, propsPayload }) });
 
       if (activeAnalysisMode === 'phala_verified') {
-        setPendingPhalaReview({
+        const preparedRun = {
           propsPayload,
           normalizedSnapshot,
           outgoingInspector: buildOutgoingInspector({ mode: 'phala_verified', propsPayload }),
-        });
+        };
+
+        if (verifiedReviewCompleted) {
+          await executeReviewedPhalaRun(preparedRun);
         } else {
+          setPendingPhalaReview(preparedRun);
+        }
+      } else {
+        setAdvisorLoading(true);
         const response = await postChannelOpeningRecommendations({ propsPayload, privacyMode: 'feature_only' });
         const items = extractOpeningRecommendations(response);
         logOpeningDebug('standard response', {
@@ -367,9 +375,51 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
               <button type="button" onClick={() => phalaModeAvailable && setAnalysisMode('phala_verified')} disabled={!phalaModeAvailable} className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest ${!phalaModeAvailable ? 'opacity-40 cursor-not-allowed' : ''}`} style={{ backgroundColor: activeAnalysisMode === 'phala_verified' ? 'rgba(59,130,246,0.18)' : 'transparent', color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)' }}>Verified</button>
             </div>
           )}
-          <div className="flex gap-3">
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex gap-3">
             <button onClick={fetchData} disabled={isMockMode || isLoading} className="px-5 py-3 rounded-xl font-bold text-sm flex items-center gap-2" style={{ backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.05)', color: 'var(--text-primary)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.1)'}`, opacity: isMockMode ? 0.7 : 1, cursor: isMockMode ? 'default' : 'pointer' }}>{isLoading && <InlineSpinner size="sm" />}{isMockMode ? 'Mock Graph Loaded' : (isLoading ? 'Syncing...' : 'Sync Graph Data')}</button>
-            <button onClick={runAdvisor} disabled={advisorLoading || !graph} className="px-6 py-3 rounded-xl font-bold text-sm text-white" style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', opacity: (advisorLoading || !graph) ? 0.6 : 1 }}>{advisorLoading ? (activeAnalysisMode === 'phala_verified' ? 'Running verified analysis...' : 'Running analysis...') : (activeAnalysisMode === 'phala_verified' ? 'Review Request' : 'Generate Recommendations')}</button>
+            {activeAnalysisMode === 'phala_verified' && verifiedReviewCompleted && (
+              <button
+                type="button"
+                onClick={() => {
+                  const normalizedSnapshot = normalizeSnapshot({
+                    nodeInfo,
+                    channels,
+                    peers,
+                    graphNodes: graph.nodes,
+                    graphEdges: graph.edges,
+                    nodeCentralityMetrics: Object.entries(nodeMetrics?.betweennessCentrality || {}).map(([nodePubkey, betweennessCentrality]) => ({ nodePubkey, betweennessCentrality })),
+                    missionControlPairs: missionControl?.pairs,
+                    collectedAt: new Date().toISOString(),
+                  });
+                  const propsPayload = applyPrivacyPolicy(normalizedSnapshot, 'feature_only');
+                  setPendingPhalaReview({
+                    propsPayload,
+                    normalizedSnapshot,
+                    outgoingInspector: buildOutgoingInspector({ mode: 'phala_verified', propsPayload }),
+                  });
+                }}
+                disabled={advisorLoading || !graph}
+                className="px-4 py-3 rounded-xl font-bold text-sm"
+                style={{
+                  backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.05)',
+                  color: 'var(--text-primary)',
+                  border: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.1)'}`,
+                  opacity: (advisorLoading || !graph) ? 0.6 : 1,
+                }}
+              >
+                Review Request
+              </button>
+            )}
+            <button onClick={runAdvisor} disabled={advisorLoading || !graph} className="px-6 py-3 rounded-xl font-bold text-sm text-white" style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', opacity: (advisorLoading || !graph) ? 0.6 : 1 }}>{advisorLoading ? (activeAnalysisMode === 'phala_verified' ? 'Running verified analysis...' : 'Running analysis...') : (activeAnalysisMode === 'phala_verified' ? (verifiedReviewCompleted ? 'Run Verified' : 'Review Request') : 'Generate Recommendations')}</button>
+            </div>
+            {activeAnalysisMode === 'phala_verified' && (
+              <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                {verifiedReviewCompleted
+                  ? 'Run Verified sends immediately. Review Request reopens the payload preview.'
+                  : 'The first verified run opens a request review before sending.'}
+              </span>
+            )}
           </div>
           {isMockMode && (
             <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
