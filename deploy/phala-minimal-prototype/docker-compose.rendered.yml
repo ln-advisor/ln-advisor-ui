@@ -47,7 +47,7 @@ services:
       PROTOTYPE_VERIFY_REQUIRE_CLOUD_APP_VERIFICATION: "true"
       PHALA_CLOUD_API_BASE_URL: "https://cloud-api.phala.network/api/v1"
       PHALA_API_VERSION: "2026-01-21"
-      PHALA_CLOUD_API_KEY: ""
+      PHALA_CLOUD_API_KEY: "phak_Duqi9Ua4TeeDOeRIQJBJfiIRd7J4vtlHRKV04N77eWk"
     command:
       - node
       - --input-type=module
@@ -246,6 +246,7 @@ services:
           return null;
         };
         const wantsFullPayload = (url) => url.searchParams.get("full") === "true";
+        const wantsDebugTrace = (url) => url.searchParams.get("debug") === "true";
         const shortenLargeString = (value, prefixLength = 16, suffixLength = 12) => {
           const text = String(value || "");
           if (text.length <= prefixLength + suffixLength + 3) return text;
@@ -1033,16 +1034,33 @@ services:
           let action = "hold";
           let suggestedFeePpm = currentFeePpm;
           let confidence = 0.6;
+          let matchedRule = "hold_balanced_channel";
+          const checks = {
+            forwardCountGte5: Number(channel.forwardCount || 0) >= 5,
+            forwardCountGte8: Number(channel.forwardCount || 0) >= 8,
+            localBalanceRatioGte0_7: Number(channel.localBalanceRatio || 0) >= 0.7,
+            failedForwardCountEq0: Number(channel.failedForwardCount || 0) === 0,
+            failedForwardCountGt0: Number(channel.failedForwardCount || 0) > 0,
+            localBalanceRatioLte0_25: Number(channel.localBalanceRatio || 0) <= 0.25,
+            forwardCountEq0: Number(channel.forwardCount || 0) === 0,
+          };
         
           if (channel.forwardCount >= 5 && channel.localBalanceRatio >= 0.7 && channel.failedForwardCount === 0) {
             action = "raise";
             suggestedFeePpm = currentFeePpm + (channel.forwardCount >= 8 ? 100 : 50);
             confidence = 0.86;
+            matchedRule = channel.forwardCount >= 8 ? "raise_high_outbound_very_active" : "raise_high_outbound_active";
             reasons.push("strong_recent_forward_activity", "outbound_liquidity_is_high");
           } else if (channel.failedForwardCount > 0 || channel.localBalanceRatio <= 0.25 || channel.forwardCount === 0) {
             action = "lower";
             suggestedFeePpm = Math.max(0, currentFeePpm - 100);
             confidence = channel.failedForwardCount > 0 ? 0.83 : 0.74;
+            matchedRule =
+              channel.failedForwardCount > 0
+                ? "lower_failed_forward_pressure"
+                : channel.localBalanceRatio <= 0.25
+                  ? "lower_low_outbound_liquidity"
+                  : "lower_no_recent_forward_activity";
             if (channel.failedForwardCount > 0) reasons.push("failed_forward_pressure");
             if (channel.localBalanceRatio <= 0.25) reasons.push("outbound_liquidity_is_low");
             if (channel.forwardCount === 0) reasons.push("no_recent_forward_activity");
@@ -1050,7 +1068,7 @@ services:
             reasons.push("channel_state_is_balanced");
           }
         
-          return {
+          const recommendation = {
             channelRef: channel.channelRef,
             peerRef: channel.peerRef,
             action,
@@ -1058,6 +1076,28 @@ services:
             suggestedFeePpm,
             confidence,
             reasons,
+          };
+        
+          return {
+            recommendation,
+            debug: {
+              channelRef: channel.channelRef,
+              peerRef: channel.peerRef,
+              inputs: {
+                currentFeePpm,
+                localBalanceSat: Number(channel.localBalanceSat || 0),
+                remoteBalanceSat: Number(channel.remoteBalanceSat || 0),
+                localBalanceRatio: Number(channel.localBalanceRatio || 0),
+                remoteBalanceRatio: Number(channel.remoteBalanceRatio || 0),
+                forwardCount: Number(channel.forwardCount || 0),
+                failedForwardCount: Number(channel.failedForwardCount || 0),
+                revenueSat: Number(channel.revenueSat || 0),
+              },
+              checks,
+              matchedRule,
+              deltaPpm: Number(suggestedFeePpm) - Number(currentFeePpm),
+              output: recommendation,
+            },
           };
         };
         
@@ -1084,7 +1124,7 @@ services:
           }
           if (Number(potentialPeer.channelCount || 0) > 50) reasons.push("well_connected_hub");
         
-          return {
+          const recommendation = {
             peerRef: potentialPeer.peerRef,
             score,
             confidence: roundFixed(Math.min(1, rawScore * 2), 3),
@@ -1096,22 +1136,67 @@ services:
             },
             reasons: reasons.sort(compareText),
           };
+        
+          return {
+            recommendation,
+            debug: {
+              peerRef: potentialPeer.peerRef,
+              inputs: {
+                capacitySat: Number(potentialPeer.capacitySat || 0),
+                channelCount: Number(potentialPeer.channelCount || 0),
+                betweennessCentrality: Number(potentialPeer.betweennessCentrality || 0),
+                missionSuccessRate:
+                  potentialPeer.missionSuccessRate === null || potentialPeer.missionSuccessRate === undefined
+                    ? null
+                    : Number(potentialPeer.missionSuccessRate),
+                missionFailureRate:
+                  potentialPeer.missionFailureRate === null || potentialPeer.missionFailureRate === undefined
+                    ? null
+                    : Number(potentialPeer.missionFailureRate),
+              },
+              thresholds: {
+                centralityP33: centralityThresholds?.p33 ?? null,
+                centralityP66: centralityThresholds?.p66 ?? null,
+              },
+              derived: {
+                centralityBand,
+                reliabilityBand,
+                capacityBand,
+                capacityBtc,
+                reliabilityWeight,
+                rawScore: roundFixed(rawScore, 6),
+              },
+              matchedSignals: {
+                highNetworkCentrality: centralityBand === "HIGH",
+                provenRoutingReliability: reliabilityBand === "HIGH",
+                altruisticLiquidityGap:
+                  capacityBand === "LOW" && Number(potentialPeer.channelCount || 0) > 5,
+                wellConnectedHub: Number(potentialPeer.channelCount || 0) > 50,
+              },
+              output: recommendation,
+            },
+          };
         };
         
-        const scorePrototypeRecommendations = (telemetry) => {
+        const scorePrototypeRecommendations = (telemetry, options = {}) => {
+          const debugEnabled = options?.debug === true;
           const transformedSnapshot = toFeatureOnly(telemetry);
-          const feeRecommendations = transformedSnapshot.channels.map(buildFeeRecommendation);
-          const channelOpeningRecommendations = (Array.isArray(transformedSnapshot.potentialPeers)
+          const feeResults = transformedSnapshot.channels.map(buildFeeRecommendation);
+          const centralityThresholds = buildPotentialCentralityThresholds(transformedSnapshot.potentialPeers);
+          const openingResults = (Array.isArray(transformedSnapshot.potentialPeers)
             ? transformedSnapshot.potentialPeers
             : [])
             .map((peer) =>
               buildChannelOpeningRecommendation(
                 peer,
-                buildPotentialCentralityThresholds(transformedSnapshot.potentialPeers)
+                centralityThresholds
               )
             )
-            .sort((left, right) => right.score - left.score)
+            .sort((left, right) => right.recommendation.score - left.recommendation.score)
             .slice(0, 10);
+        
+          const feeRecommendations = feeResults.map((item) => item.recommendation);
+          const channelOpeningRecommendations = openingResults.map((item) => item.recommendation);
         
           return {
             modelVersion: "prototype-fee-forward-v1",
@@ -1127,6 +1212,21 @@ services:
                 openingCount: channelOpeningRecommendations.length,
               },
             },
+            ...(debugEnabled
+              ? {
+                  debugTrace: {
+                    schemaVersion: "prototype-debug-trace-v1",
+                    generatedAt: new Date().toISOString(),
+                    telemetrySummary: {
+                      nodeAlias: String(telemetry?.nodeAlias || "prototype-node"),
+                      channelCount: Array.isArray(telemetry?.channels) ? telemetry.channels.length : 0,
+                      potentialPeerCount: Array.isArray(telemetry?.potentialPeers) ? telemetry.potentialPeers.length : 0,
+                    },
+                    feeRecommendationEvaluations: feeResults.map((item) => item.debug),
+                    openingCandidateEvaluations: openingResults.map((item) => item.debug),
+                  },
+                }
+              : {}),
           };
         };
         
@@ -2026,7 +2126,8 @@ services:
               return;
             }
         
-            const scored = scorePrototypeRecommendations(telemetry);
+            const debugTraceEnabled = wantsDebugTrace(url);
+            const scored = scorePrototypeRecommendations(telemetry, { debug: debugTraceEnabled });
             const sourceReceipt = buildSourceReceipt(telemetry);
             try {
               const arb = await buildPrototypeArb(scored, sourceReceipt);
@@ -2040,7 +2141,23 @@ services:
                 recommendationSet: scored.recommendationSet,
                 sourceReceipt,
                 arb,
+                ...(debugTraceEnabled ? { debugTrace: scored.debugTrace } : {}),
               };
+              if (debugTraceEnabled) {
+                console.info(
+                  `[$${SERVICE_NAME}] debugTrace`,
+                  JSON.stringify(
+                    {
+                      telemetryHash: sha256Hex(telemetry || {}),
+                      transformedSnapshotHash: sha256Hex(scored.transformedSnapshot || {}),
+                      recommendationSetHash: sha256Hex(scored.recommendationSet || {}),
+                      debugTrace: scored.debugTrace,
+                    },
+                    null,
+                    2
+                  )
+                );
+              }
               sendJson(
                 res,
                 200,

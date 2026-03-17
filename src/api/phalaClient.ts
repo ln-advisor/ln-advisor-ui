@@ -11,6 +11,16 @@ const PHALA_DEV_PROXY_BASE = "/__phala";
 
 const isTruthy = (value: string): boolean => ["1", "true", "yes", "on"].includes(value);
 
+declare global {
+  interface Window {
+    __LN_ADVISOR_PHALA_DEBUG__?: {
+      enabled: boolean;
+      entries: Array<{ label: string; payload?: unknown; timestamp: string }>;
+      last?: { label: string; payload?: unknown; timestamp: string };
+    };
+  }
+}
+
 export interface PhalaUiConfig {
   enabled: boolean;
   available: boolean;
@@ -27,6 +37,32 @@ export interface PhalaVerifiedRunResult {
 }
 
 const isPhalaDebugLogsEnabled = (): boolean => isTruthy(PHALA_DEBUG_LOGS_FLAG);
+const pushBrowserDebugEntry = (label: string, payload?: unknown): void => {
+  if (typeof window === "undefined") return;
+  const state = window.__LN_ADVISOR_PHALA_DEBUG__ || {
+    enabled: true,
+    entries: [],
+  };
+  const entry = {
+    label,
+    payload,
+    timestamp: new Date().toISOString(),
+  };
+  state.enabled = true;
+  state.entries.push(entry);
+  state.last = entry;
+  window.__LN_ADVISOR_PHALA_DEBUG__ = state;
+};
+
+const debugLog = (label: string, payload?: unknown): void => {
+  if (!isPhalaDebugLogsEnabled()) return;
+  pushBrowserDebugEntry(label, payload);
+  if (payload === undefined) {
+    console.warn(`[LN Advisor][Verified Runtime] ${label}`);
+    return;
+  }
+  console.warn(`[LN Advisor][Verified Runtime] ${label}`, payload);
+};
 
 const appendDebugQuery = (path: string): string => {
   if (!isPhalaDebugLogsEnabled()) return path;
@@ -114,39 +150,75 @@ export const getPhalaHealth = async <T = unknown>(): Promise<T> => getJson<T>("/
 export const runPhalaVerifiedRecommendation = async (
   telemetry: unknown
 ): Promise<PhalaVerifiedRunResult> => {
-  const recommend = await postJson<any>(appendDebugQuery("/api/recommend?full=true"), { telemetry });
-  const healthPromise = getPhalaHealth().catch(() => null);
-  const info = await getJson<any>("/info?full=true");
-  const attestation = await getJson<any>("/attestation?full=true");
-  const verify = await postJson<any>("/api/verify", {
-    transformedSnapshot: recommend?.transformedSnapshot,
-    recommendationSet: recommend?.recommendationSet,
-    arb: recommend?.arb,
-    sourceReceipt: recommend?.sourceReceipt,
-    liveAppInfo: info,
-    liveAppAttestation: attestation,
+  const recommendPath = appendDebugQuery("/api/recommend?full=true");
+  const healthPath = "/health";
+  const infoPath = "/info?full=true";
+  const attestationPath = "/attestation?full=true";
+  const verifyPath = "/api/verify";
+
+  debugLog("start", {
+    baseUrl: ensureBaseUrl(),
+    recommendPath,
+    healthPath,
+    infoPath,
+    attestationPath,
+    verifyPath,
+    telemetry,
   });
 
-  const result = {
-    health: await healthPromise,
-    recommend,
-    info,
-    attestation,
-    verify,
-  };
+  try {
+    const recommend = await postJson<any>(recommendPath, { telemetry });
+    debugLog("recommend response", {
+      ok: recommend?.ok,
+      mode: recommend?.mode,
+      modelVersion: recommend?.modelVersion,
+      summary: recommend?.recommendationSet?.summary || null,
+      debugTrace: recommend?.debugTrace || null,
+    });
 
-  if (isPhalaDebugLogsEnabled()) {
-    console.groupCollapsed("[LN Advisor] Verified Runtime Debug");
-    console.info("Submitted telemetry", telemetry);
-    console.info("Transformed snapshot", result.recommend?.transformedSnapshot);
-    console.info("Recommendation set", result.recommend?.recommendationSet);
-    console.info("Debug trace", result.recommend?.debugTrace || null);
-    console.info("Health", result.health);
-    console.info("Runtime info", result.info);
-    console.info("Runtime attestation", result.attestation);
-    console.info("Verify", result.verify);
-    console.groupEnd();
+    const healthPromise = getPhalaHealth()
+      .then((health) => {
+        debugLog("health response", health);
+        return health;
+      })
+      .catch((error) => {
+        debugLog("health response failed", error instanceof Error ? error.message : String(error));
+        return null;
+      });
+
+    const info = await getJson<any>(infoPath);
+    debugLog("info response", info);
+
+    const attestation = await getJson<any>(attestationPath);
+    debugLog("attestation response", attestation);
+
+    const verify = await postJson<any>(verifyPath, {
+      transformedSnapshot: recommend?.transformedSnapshot,
+      recommendationSet: recommend?.recommendationSet,
+      arb: recommend?.arb,
+      sourceReceipt: recommend?.sourceReceipt,
+      liveAppInfo: info,
+      liveAppAttestation: attestation,
+    });
+    debugLog("verify response", verify);
+
+    const result = {
+      health: await healthPromise,
+      recommend,
+      info,
+      attestation,
+      verify,
+    };
+
+    debugLog("complete", {
+      verifyOk: result.verify?.ok,
+      quoteVerified: result.verify?.cloudVerification?.quoteVerified || false,
+      errors: result.verify?.errors || [],
+    });
+
+    return result;
+  } catch (error) {
+    debugLog("failed", error instanceof Error ? { message: error.message, stack: error.stack } : error);
+    throw error;
   }
-
-  return result;
 };
