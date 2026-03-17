@@ -147,8 +147,9 @@ const buildFeeMap = (
     }
     const current = feeMap.get(channelId)!;
     const feePpm = toNumber(policy.feeRatePpm);
-    const directionPubKey = String(policy.directionPubKey || "").trim();
-    if (directionPubKey && nodePubkey && directionPubKey === nodePubkey) {
+    const directionPubKey = normalizePubkey(String(policy.directionPubKey || "").trim());
+    const normalizedNodePubkey = normalizePubkey(nodePubkey);
+    if (directionPubKey && normalizedNodePubkey && directionPubKey === normalizedNodePubkey) {
       current.outboundFeePpm = feePpm;
     } else if (current.inboundFeePpm === null) {
       current.inboundFeePpm = feePpm;

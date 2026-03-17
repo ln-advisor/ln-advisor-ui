@@ -459,7 +459,7 @@ function App() {
                 backdropFilter: 'blur(12px)',
               }}
             >
-              <AppHeader nodeInfo={null} nodeChannelsCount="—" peersCount="—" onShowPeers={() => {}} />
+              <AppHeader nodeInfo={null} nodeChannelsCount="—" peersCount="—" onShowPeers={() => { }} />
               <NavBar
                 darkMode={darkMode}
                 isLoggedIn={false}
