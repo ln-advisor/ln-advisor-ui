@@ -803,8 +803,12 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             }));
 
             try {
-                const vRes = await postVerify(res.arb, res.sourceProvenance);
-                setVerifyResult(vRes);
+                if (res?.arb) {
+                    const vRes = await postVerify(res.arb, res.sourceProvenance);
+                    setVerifyResult(vRes);
+                } else {
+                    setVerifyResult(null);
+                }
             } catch (vErr) {
                 console.warn('ARB Verification failed:', vErr);
                 setVerifyResult({ ok: false, error: vErr.message });
@@ -1861,8 +1865,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
 
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Verification</span>
-                                                <span className="font-mono text-xs" style={{ color: verifyResult?.ok ? '#22c55e' : '#f97316' }}>
-                                                    {verifyResult ? (verifyResult.ok ? 'Verified' : 'Verification failed') : 'Pending'}
+                                                <span className="font-mono text-xs" style={{ color: verifyResult?.ok ? '#22c55e' : activeAnalysisMode === 'phala_verified' ? '#f97316' : 'var(--text-secondary)' }}>
+                                                    {verifyResult ? (verifyResult.ok ? 'Verified' : 'Verification failed') : (activeAnalysisMode === 'phala_verified' ? 'Pending' : 'Not available')}
                                                 </span>
                                             </div>
 

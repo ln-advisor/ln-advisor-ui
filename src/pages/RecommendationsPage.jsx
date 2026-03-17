@@ -325,9 +325,13 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
         setRecommendations(mapped);
         setPipelineData((prev) => ({ ...prev, outgoingInspector: buildOutgoingInspector({ mode: activeAnalysisMode, propsPayload, standardResponse: response }) }));
         try {
-          const verify = await postVerify(response.arb, response.sourceProvenance);
-          logOpeningDebug('standard verify', verify);
-          setVerifyResult(verify);
+          if (response?.arb) {
+            const verify = await postVerify(response.arb, response.sourceProvenance);
+            logOpeningDebug('standard verify', verify);
+            setVerifyResult(verify);
+          } else {
+            setVerifyResult(null);
+          }
         } catch (verifyError) {
           console.warn('ARB verification failed:', verifyError);
           setVerifyResult({ ok: false, error: verifyError.message });
@@ -441,7 +445,7 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
         <div className="rounded-2xl p-5 space-y-4" style={{ backgroundColor: 'var(--bg-card)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)'}` }}>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3 text-sm">
             <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Execution Mode</span><span className="font-mono text-xs" style={{ color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-primary)' }}>{activeAnalysisMode === 'phala_verified' ? 'Verified Runtime (TEE)' : 'Local'}</span></div>
-            <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Verification</span><span className="font-mono text-xs" style={{ color: verifyResult?.ok ? '#22c55e' : '#f97316' }}>{verifyResult ? (verifyResult.ok ? 'Verified' : 'Verification failed') : 'Pending'}</span></div>
+            <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Verification</span><span className="font-mono text-xs" style={{ color: verifyResult?.ok ? '#22c55e' : activeAnalysisMode === 'phala_verified' ? '#f97316' : 'var(--text-secondary)' }}>{verifyResult ? (verifyResult.ok ? 'Verified' : 'Verification failed') : (activeAnalysisMode === 'phala_verified' ? 'Pending' : 'Not available')}</span></div>
             <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Candidates</span><span className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{recommendations.length}</span></div>
           </div>
           {phalaRun && (

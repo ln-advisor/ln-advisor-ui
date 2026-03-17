@@ -660,7 +660,6 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
       // ─────────────────────────────────────────────────────────────────────
       if (url.pathname === "/api/recommend/channel-openings") {
         const propsPayload = body.propsPayload as import("../privacy/applyPrivacyPolicy").FeatureOnlyNodeState | undefined;
-        const issuedAt = typeof body.issuedAt === "string" ? body.issuedAt : undefined;
 
         if (!propsPayload || typeof propsPayload !== "object") {
           sendJson(res, 400, { ok: false, error: "Provide a propsPayload (PROPS feature_only node state)." });
@@ -668,33 +667,27 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
         }
 
         const collectedAt = new Date().toISOString();
+        const sourceProvenance = buildPropsProvenance(propsPayload, collectedAt);
         const recommendation = scoreNodeState(propsPayload as any, {
           nodePubkey: "props-shielded",
           nodeAlias: (propsPayload as any).nodeAlias || "my-node-alias",
           collectedAt,
         });
 
-        const arb = buildArb({
-          recommendation,
-          sourceProvenance: buildPropsProvenance(propsPayload, collectedAt),
-          privacyPolicyId: "feature_only",
-          devSigningKey: process.env.ARB_DEV_SIGNING_KEY?.trim() || DEFAULT_DEV_SIGNING_KEY,
-          issuedAt: issuedAt || process.env.ARB_ISSUED_AT?.trim() || collectedAt,
-        });
-
         const recommendationPath = path.resolve(process.cwd(), "artifacts", "channel-openings.recommendations.json");
-        const arbPath = path.resolve(process.cwd(), "artifacts", "channel-openings.arb.json");
+        const sourceProvenancePath = path.resolve(process.cwd(), "artifacts", "channel-openings.source-provenance.json");
         await writeJsonDeterministic(recommendationPath, recommendation);
-        await writeJsonDeterministic(arbPath, arb);
+        await writeJsonDeterministic(sourceProvenancePath, sourceProvenance);
 
         sendJson(res, 200, {
           ok: true,
           route: "channel-openings",
           privacyMode: "feature_only",
           recommendationPath,
-          arbPath,
+          sourceProvenancePath,
+          verificationAvailable: false,
           recommendation,
-          arb,
+          sourceProvenance,
         });
         return;
       }
@@ -716,7 +709,6 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
       if (url.pathname === "/api/recommend/fee-suggestions") {
         const propsPayload = body.propsPayload as import("../privacy/applyPrivacyPolicy").FeatureOnlyNodeState | undefined;
         const peerFeeContext = body.peerFeeContext as { networkInAvgPpm?: number | null; networkOutAvgPpm?: number | null } | undefined;
-        const issuedAt = typeof body.issuedAt === "string" ? body.issuedAt : undefined;
 
         if (!propsPayload || typeof propsPayload !== "object") {
           sendJson(res, 400, { ok: false, error: "Provide a propsPayload (PROPS feature_only node state for the channel)." });
@@ -731,33 +723,27 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
         };
 
         const collectedAt = new Date().toISOString();
+        const sourceProvenance = buildPropsProvenance(propsPayload, collectedAt);
         const recommendation = scoreNodeState(payloadWithContext as any, {
           nodePubkey: "props-shielded",
           nodeAlias: (propsPayload as any).nodeAlias || "my-node-alias",
           collectedAt,
         });
 
-        const arb = buildArb({
-          recommendation,
-          sourceProvenance: buildPropsProvenance(propsPayload, collectedAt),
-          privacyPolicyId: "feature_only",
-          devSigningKey: process.env.ARB_DEV_SIGNING_KEY?.trim() || DEFAULT_DEV_SIGNING_KEY,
-          issuedAt: issuedAt || process.env.ARB_ISSUED_AT?.trim() || collectedAt,
-        });
-
         const recommendationPath = path.resolve(process.cwd(), "artifacts", "fee-suggestions.recommendations.json");
-        const arbPath = path.resolve(process.cwd(), "artifacts", "fee-suggestions.arb.json");
+        const sourceProvenancePath = path.resolve(process.cwd(), "artifacts", "fee-suggestions.source-provenance.json");
         await writeJsonDeterministic(recommendationPath, recommendation);
-        await writeJsonDeterministic(arbPath, arb);
+        await writeJsonDeterministic(sourceProvenancePath, sourceProvenance);
 
         sendJson(res, 200, {
           ok: true,
           route: "fee-suggestions",
           privacyMode: "feature_only",
           recommendationPath,
-          arbPath,
+          sourceProvenancePath,
+          verificationAvailable: false,
           recommendation,
-          arb,
+          sourceProvenance,
         });
         return;
       }
