@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
-    postFeeSuggestion,
+    buildFrontendTelemetryEnvelope,
+    postRecommend,
     postVerify,
     postAnalyzeGemini,
 } from '../api/telemetryClient';
@@ -44,6 +45,7 @@ const getStandardApiBaseUrl = () => String(import.meta.env.VITE_API_BASE_URL || 
 
 const PHALA_UI_CONFIG = getPhalaUiConfig();
 const getPhalaTransportBaseUrl = () => import.meta.env.DEV ? '/__phala' : (PHALA_UI_CONFIG.appUrl || '');
+const makeChannelRef = (index) => `channel_${String(index + 1).padStart(4, '0')}`;
 
 const normalizePolicy = (policy) => {
     if (!policy) return null;
@@ -505,7 +507,16 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         ? 'phala_verified'
         : (phalaModeAvailable && analysisMode === 'phala_verified' ? 'phala_verified' : 'standard');
 
-    const extractFeeRecommendation = (response) => {
+    const getSelectedChannelRef = (channels = nodeChannels, selectedChannelId = selectedChannel?.chanId) => {
+        const sortedIds = [...channels]
+            .map((channel) => String(channel?.chanId || channel?.chan_id || channel?.channelId || '').trim())
+            .filter(Boolean)
+            .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        const index = sortedIds.findIndex((channelId) => channelId === String(selectedChannelId || ''));
+        return index >= 0 ? makeChannelRef(index) : null;
+    };
+
+    const extractFeeRecommendation = (response, expectedChannelRef = null) => {
         const feeRecommendations =
             response?.recommendation?.feeRecommendations ||
             response?.recommendationSet?.feeRecommendations ||
@@ -515,8 +526,52 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             return null;
         }
 
-        return feeRecommendations.find((item) => item.channelRef === 'channel_0001' || item.channelId === selectedChannel?.chanId)
+        return feeRecommendations.find((item) =>
+            (expectedChannelRef && item.channelRef === expectedChannelRef) ||
+            item.channelRef === 'channel_0001' ||
+            item.channelId === selectedChannel?.chanId
+        )
             || feeRecommendations[0];
+    };
+
+    const buildFrontendFeePolicies = () => {
+        return nodeChannels.flatMap((channel) => {
+            const channelId = String(channel?.chanId || channel?.chan_id || '');
+            const info = chanInfoMap[channelId];
+            if (!channelId || !info) return [];
+
+            const node1Pub = String(info.node1_pub || info.node1Pub || '').toLowerCase();
+            const node2Pub = String(info.node2_pub || info.node2Pub || '').toLowerCase();
+            const node1Policy = info.node1_policy || info.node1Policy;
+            const node2Policy = info.node2_policy || info.node2Policy;
+
+            const records = [];
+            if (node1Policy && node1Pub) {
+                records.push({
+                    channelId,
+                    directionPubKey: node1Pub,
+                    feeRatePpm: getFeeRatePpm(node1Policy),
+                    feeBaseMsat: node1Policy.feeBaseMsat ?? node1Policy.fee_base_msat ?? 0,
+                    timeLockDelta: node1Policy.timeLockDelta ?? node1Policy.time_lock_delta ?? 0,
+                    minHtlcMsat: node1Policy.minHtlcMsat ?? node1Policy.min_htlc_msat ?? node1Policy.minHtlc ?? node1Policy.min_htlc ?? 0,
+                    maxHtlcMsat: node1Policy.maxHtlcMsat ?? node1Policy.max_htlc_msat ?? 0,
+                    disabled: Boolean(node1Policy.disabled),
+                });
+            }
+            if (node2Policy && node2Pub) {
+                records.push({
+                    channelId,
+                    directionPubKey: node2Pub,
+                    feeRatePpm: getFeeRatePpm(node2Policy),
+                    feeBaseMsat: node2Policy.feeBaseMsat ?? node2Policy.fee_base_msat ?? 0,
+                    timeLockDelta: node2Policy.timeLockDelta ?? node2Policy.time_lock_delta ?? 0,
+                    minHtlcMsat: node2Policy.minHtlcMsat ?? node2Policy.min_htlc_msat ?? node2Policy.minHtlc ?? node2Policy.min_htlc ?? 0,
+                    maxHtlcMsat: node2Policy.maxHtlcMsat ?? node2Policy.max_htlc_msat ?? 0,
+                    disabled: Boolean(node2Policy.disabled),
+                });
+            }
+            return records;
+        });
     };
 
     const buildOutgoingInspector = ({
@@ -570,19 +625,15 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         }
 
         const baseUrl = getStandardApiBaseUrl();
-        const recommendBody = {
-            propsPayload,
-            peerFeeContext: {
-                networkInAvgPpm,
-                networkOutAvgPpm,
-            },
+        const recommendBody = standardResponse?._localRecommendRequest || {
+            telemetry: lastTelemetry,
             privacyMode: 'feature_only',
         };
         const requests = [
             {
                 label: 'Recommend',
                 method: 'POST',
-                endpoint: `${baseUrl}/api/recommend/fee-suggestions`,
+                endpoint: `${baseUrl}/api/recommend`,
                 bodyBytes: jsonByteLength(recommendBody),
                 body: recommendBody,
             },
@@ -776,16 +827,44 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             }
 
             setPropsLoading(true);
-            const res = await postFeeSuggestion({
-                propsPayload: propsSnapshot,
-                peerFeeContext: {
-                    networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
-                    networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
-                },
+            const selectedChannelRef = getSelectedChannelRef();
+            const fullTelemetry = buildFrontendTelemetryEnvelope({
+                namespace: 'tapvolt',
+                nodeInfo: nodeInfo || (nodePubkey ? { identityPubkey: nodePubkey } : null),
+                channels: nodeChannels.map((channel) => {
+                    const channelId = String(channel?.chanId || channel?.chan_id || '');
+                    return {
+                        ...channel,
+                        ...(channelId === String(selectedChannel?.chanId || '')
+                            ? {
+                                networkInAvg: peerFeeStats?.correctedAvg ?? null,
+                                networkOutAvg: peerOutFeeStats?.correctedAvg ?? null,
+                            }
+                            : {}),
+                    };
+                }),
+                forwardingHistory: forwards,
+                routingFailures: [],
+                feePolicies: buildFrontendFeePolicies(),
+                peers,
+                graphSnapshot: null,
+                missionControl: missionControl || { pairs: [] },
+                nodeMetrics: { betweennessCentrality: {} },
+            });
+            setLastTelemetry(fullTelemetry);
+            const res = await postRecommend({
+                telemetry: fullTelemetry,
                 privacyMode: 'feature_only',
             });
+            const localResponse = {
+                ...res,
+                _localRecommendRequest: {
+                    telemetry: fullTelemetry,
+                    privacyMode: 'feature_only',
+                },
+            };
 
-            const recommendation = extractFeeRecommendation(res);
+            const recommendation = extractFeeRecommendation(res, selectedChannelRef);
             if (!recommendation) {
                 throw new Error('Local analysis returned no fee recommendation for the selected channel.');
             }
@@ -796,7 +875,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 outgoingInspector: buildOutgoingInspector({
                     mode: activeAnalysisMode,
                     propsPayload: propsSnapshot,
-                    standardResponse: res,
+                    standardResponse: localResponse,
                     networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
                     networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
                 }),
