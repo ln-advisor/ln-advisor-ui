@@ -3,7 +3,8 @@ import {
     ResponsiveContainer,
     BarChart, Bar,
     XAxis, YAxis,
-    Tooltip, CartesianGrid, Cell
+    Tooltip, CartesianGrid, Cell,
+    Sankey
 } from 'recharts';
 import SectionBadge from '../components/analysis/SectionBadge';
 import ErrorBanner from '../components/analysis/ErrorBanner';
@@ -60,6 +61,160 @@ const StatCard = ({ title, value, sub, color, darkMode, badge }) => (
         {sub && <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{sub}</p>}
     </div>
 );
+
+
+const FlowTopologyGraph = ({ circuits, nodesMetadata, darkMode }) => {
+    const [hoveredPeer, setHoveredPeer] = useState(null);
+
+    if (!circuits || circuits.length === 0) {
+        return <div className="h-full flex items-center justify-center text-slate-500 italic">No forwarding circuits to visualize</div>;
+    }
+
+    const width = 800; // Wider for full-width layout
+    const height = 450;
+    const center = { x: width / 2, y: height / 2 };
+    const radius = 160;
+
+    // Unique peers involved in circuits
+    const peerNames = [...new Set([
+        ...circuits.map(c => c.src),
+        ...circuits.map(c => c.dst)
+    ])];
+    
+    const peerPositions = new Map();
+    peerNames.forEach((name, i) => {
+        const angle = (i / peerNames.length) * 2 * Math.PI - Math.PI / 2;
+        peerPositions.set(name, {
+            x: center.x + radius * Math.cos(angle),
+            y: center.y + radius * Math.sin(angle),
+            name
+        });
+    });
+
+    const getArcPath = (start, end, bend = 25) => {
+        const midX = (start.x + end.x) / 2;
+        const midY = (start.y + end.y) / 2;
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len === 0) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const cpX = midX + nx * bend;
+        const cpY = midY + ny * bend;
+        return `M ${start.x} ${start.y} Q ${cpX} ${cpY} ${end.x} ${end.y}`;
+    };
+
+    return (
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+            <defs>
+                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+            </defs>
+
+            {/* Circuits (Paths) */}
+            {circuits.map((circ, i) => {
+                const srcPos = peerPositions.get(circ.src);
+                const dstPos = peerPositions.get(circ.dst);
+                if (!srcPos || !dstPos) return null;
+
+                const isHighlighted = hoveredPeer === circ.src || hoveredPeer === circ.dst;
+                const strokeWidth = Math.max(1.5, Math.min(8, Math.log10(circ.val + 1) * 2.5));
+                const opacity = hoveredPeer ? (isHighlighted ? 0.95 : 0.05) : 0.3;
+                
+                // Color coding: Blue for Inbound, Red for Outbound
+                const colorIn = "var(--accent-2)";
+                const colorOut = "var(--accent-3)";
+                const activeColor = isHighlighted ? (hoveredPeer === circ.src ? colorIn : colorOut) : (darkMode ? "#818cf8" : "#6366f1");
+
+                const pathIn = getArcPath(srcPos, center, 30);
+                const pathOut = getArcPath(center, dstPos, -30);
+
+                return (
+                    <g key={`circ-${i}`} style={{ transition: 'opacity 0.3s' }} opacity={opacity}>
+                        {/* Inlet: Peer -> Me */}
+                        <path d={pathIn} stroke={colorIn} strokeWidth={strokeWidth} fill="none" strokeOpacity={0.5} />
+                        {/* Outlet: Me -> Peer */}
+                        <path d={pathOut} stroke={colorOut} strokeWidth={strokeWidth} fill="none" strokeOpacity={0.5} />
+                        
+                        {/* Flow Particles */}
+                        <circle r={strokeWidth/2 + 1} fill={colorIn} filter="url(#glow)">
+                            <animateMotion
+                                dur={`${Math.max(0.6, 4 - Math.log10(circ.val + 1))}s`}
+                                repeatCount="indefinite"
+                                path={pathIn}
+                            />
+                        </circle>
+                        <circle r={strokeWidth/2 + 1} fill={colorOut} filter="url(#glow)">
+                            <animateMotion
+                                dur={`${Math.max(0.6, 4 - Math.log10(circ.val + 1))}s`}
+                                repeatCount="indefinite"
+                                path={pathOut}
+                                begin="0.2s"
+                            />
+                        </circle>
+                    </g>
+                );
+            })}
+
+            {/* Peer Nodes */}
+            {[...peerPositions.values()].map((peer, i) => {
+                const isHovered = hoveredPeer === peer.name;
+                const metadata = nodesMetadata.get(peer.name);
+                
+                // Role-based coloring: Balanced = Green, Source = Blue, Drain = Red
+                let nodeColor = "#94a3b8"; // Default
+                if (metadata) {
+                    if (metadata.flowType === 'Balanced') nodeColor = "var(--accent-1)";
+                    else if (metadata.flowType === 'Source') nodeColor = "var(--accent-2)";
+                    else if (metadata.flowType === 'Drain') nodeColor = "var(--accent-3)";
+                }
+
+                return (
+                    <g 
+                        key={`peer-${i}`} 
+                        onMouseEnter={() => setHoveredPeer(peer.name)} 
+                        onMouseLeave={() => setHoveredPeer(null)}
+                        className="cursor-pointer"
+                    >
+                        <circle 
+                            cx={peer.x} cy={peer.y} r={isHovered ? 14 : 10} 
+                            fill={nodeColor} 
+                            stroke={darkMode ? "#1e293b" : "#fff"} 
+                            strokeWidth="2" 
+                            style={{ transition: 'all 0.2s' }}
+                            filter={isHovered ? "url(#glow)" : ""}
+                        />
+                        <text 
+                            x={peer.x} y={peer.y + (peer.y > center.y ? 28 : -22)} 
+                            textAnchor="middle" 
+                            fontSize={isHovered ? "11" : "9"} 
+                            fontWeight={isHovered ? "700" : "600"}
+                            fill={darkMode ? "rgba(255,255,255,0.95)" : "rgba(15,23,42,0.9)"}
+                            style={{ transition: 'all 0.2s', textShadow: darkMode ? '0 1px 2px rgba(0,0,0,0.5)' : 'none' }}
+                        >
+                            {peer.name}
+                        </text>
+                        {isHovered && metadata && (
+                            <text 
+                                x={peer.x} y={peer.y + (peer.y > center.y ? 42 : 38)} 
+                                textAnchor="middle" fontSize="9" fill="var(--text-secondary)" fontWeight="bold"
+                            >
+                                {metadata.flowType}
+                            </text>
+                        )}
+                    </g>
+                );
+            })}
+
+            {/* Your Node (Center) */}
+            <circle cx={center.x} cy={center.y} r="18" fill="var(--bg-app)" stroke="var(--accent-1)" strokeWidth="3" filter="url(#glow)" />
+            <text x={center.x} y={center.y + 6} textAnchor="middle" fontSize="10" fontWeight="900" fill="var(--accent-1)" pointerEvents="none">YOU</text>
+        </svg>
+    );
+};
 
 const ChartCard = ({ title, subtitle, darkMode, children, right }) => (
     <div
@@ -241,6 +396,62 @@ const CyclesAnalysisPage = ({ lnc, darkMode }) => {
 
         const criticalDrains = drains.filter(r => r.runwayMultiplier !== null && r.runwayMultiplier < 5);
 
+        // Map chanId to Peer Label
+        const chanToPeer = new Map();
+        rows.forEach(r => {
+            chanToPeer.set(r.id, r.alias || shortHex(r.peerPubkey, 10));
+        });
+
+        // 1. Granular P2P Flow Mapping (Circuits)
+        const p2pCount = new Map(); // "LabelA:::LabelB" => volume
+        const p2pCircuits = []; // [{ src, dst, val }]
+        
+        for (const ev of forwardingEvents) {
+            const cidIn  = String(ev.chanIdIn  || ev.chan_id_in  || '').trim();
+            const cidOut = String(ev.chanIdOut || ev.chan_id_out || '').trim();
+            if (!cidIn || !cidOut) continue;
+
+            const pIn  = chanToPeer.get(cidIn);
+            const pOut = chanToPeer.get(cidOut);
+            if (!pIn || !pOut) continue;
+
+            const key = `${pIn}:::${pOut}`;
+            const amt = toNum(ev.amtOut ?? ev.amt_out ?? 0);
+            p2pCount.set(key, (p2pCount.get(key) || 0) + amt);
+        }
+
+        // 2. Prepare Top Circuits
+        [...p2pCount.entries()]
+            .sort((a,b) => b[1] - a[1])
+            .slice(0, 15)
+            .forEach(([key, val]) => {
+                const [src, dst] = key.split(':::');
+                p2pCircuits.push({ src, dst, val });
+            });
+
+        // 3. Sankey Data (Aggregation for visualization)
+        const sankeyNodes = [{ name: 'Your Node' }];
+        const sankeyLinks = [];
+        const nodeIdxMap = new Map();
+        nodeIdxMap.set('Your Node', 0);
+
+        const getIdx = (name) => {
+            if (nodeIdxMap.has(name)) return nodeIdxMap.get(name);
+            sankeyNodes.push({ name });
+            const idx = sankeyNodes.length - 1;
+            nodeIdxMap.set(name, idx);
+            return idx;
+        };
+
+        p2pCircuits.forEach(({ src, dst, val }) => {
+            const srcIdx = getIdx(`${src} (In)`);
+            sankeyLinks.push({ source: srcIdx, target: 0, value: val });
+            const dstIdx = getIdx(`${dst} (Out)`);
+            sankeyLinks.push({ source: 0, target: dstIdx, value: val });
+        });
+
+        const sankeyData = { nodes: sankeyNodes, links: sankeyLinks };
+
         const chartData = [
             { label: 'Balanced', count: balanced.length, fill: 'var(--accent-1)' },
             { label: 'Source',   count: sources.length,  fill: 'var(--accent-2)' },
@@ -248,8 +459,15 @@ const CyclesAnalysisPage = ({ lnc, darkMode }) => {
             { label: 'Idle',     count: idle.length,     fill: '#94a3b8' },
         ];
 
-        return { rows, drains, sources, balanced, idle, avgCircularity, criticalDrains, chartData };
-    }, [channels, forwardingEvents]);
+        // Metadata for Graph Component
+        const nodesMetadata = new Map();
+        rows.forEach(r => {
+            const label = r.alias || shortHex(r.peerPubkey, 10);
+            nodesMetadata.set(label, { flowType: r.flowType, netFlow: r.netFlow });
+        });
+
+        return { rows, drains, sources, balanced, idle, avgCircularity, criticalDrains, chartData, sankeyData, p2pCircuits, nodesMetadata };
+    }, [channels, forwardingEvents, aliasMap]);
 
     const chartTheme = useMemo(() => {
         const axis = darkMode ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)';
@@ -459,7 +677,9 @@ const CyclesAnalysisPage = ({ lnc, darkMode }) => {
                                     <div className="space-y-1">
                                         {cyclesSummary.criticalDrains.slice(0, 5).map(r => (
                                             <div key={r.id} className="flex items-center justify-between text-xs">
-                                                <span style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{shortHex(r.id, 16)}</span>
+                                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                                                    {r.alias || shortHex(r.peerPubkey, 12)}
+                                                </span>
                                                 <span style={{ color: '#ef4444', fontWeight: 700 }}>
                                                     Runway ×{r.runwayMultiplier?.toFixed(1) ?? '—'}
                                                 </span>
@@ -492,7 +712,20 @@ const CyclesAnalysisPage = ({ lnc, darkMode }) => {
                                     </ChartCard>
                                 </div>
 
+                                {/* Flow Graph - Expands to fill remaining grid space or full width */}
                                 <div className="lg:col-span-2">
+                                    <ChartCard title="Satoshi Forwarding Circuits" subtitle="Top Peer-to-Peer flow paths through your node. Blue = Inbound, Red = Outbound." darkMode={darkMode}>
+                                        <div style={{ width: '100%', height: 450 }}>
+                                            <FlowTopologyGraph 
+                                                circuits={cyclesSummary.p2pCircuits} 
+                                                nodesMetadata={cyclesSummary.nodesMetadata}
+                                                darkMode={darkMode} 
+                                            />
+                                        </div>
+                                    </ChartCard>
+                                </div>
+
+                                <div className="lg:col-span-3">
                                      <ChartCard title="Per-channel cycles detail" darkMode={darkMode}>
                                         <div style={{ overflowX: 'auto' }}>
                                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
