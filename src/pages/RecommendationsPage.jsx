@@ -88,7 +88,7 @@ const buildOutgoingInspector = ({ mode, propsPayload, standardResponse = null, p
       };
       requests.push({ label: 'Verify', method: 'POST', endpoint: `${baseUrl}/api/verify`, bodyBytes: jsonByteLength(verifyBody), body: verifyBody });
     }
-    return { route: 'Verified', transport: import.meta.env.DEV ? 'Browser -> Vite proxy -> verified service' : 'Browser -> verified service', requests };
+    return { route: 'Verified Runtime (TEE)', transport: import.meta.env.DEV ? 'Browser -> Vite proxy -> verified service' : 'Browser -> verified service', requests };
   }
 
   const baseUrl = getStandardApiBaseUrl();
@@ -100,7 +100,7 @@ const buildOutgoingInspector = ({ mode, propsPayload, standardResponse = null, p
     const verifyBody = { arb: standardResponse.arb, ...(standardResponse.sourceProvenance ? { sourceProvenance: standardResponse.sourceProvenance } : {}) };
     requests.push({ label: 'Verify', method: 'POST', endpoint: `${baseUrl}/api/verify`, bodyBytes: jsonByteLength(verifyBody), body: verifyBody });
   }
-  return { route: 'Standard API', transport: 'Browser -> local API', requests };
+  return { route: 'Local', transport: 'Browser -> local API', requests };
 };
 
 const DataModal = ({ isOpen, onClose, title, data, darkMode }) => {
@@ -371,8 +371,8 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
         <div className="flex flex-col gap-3 md:items-end">
           {phalaModeEnabled && (
             <div className="flex items-center gap-1 rounded-lg border p-1" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', backgroundColor: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
-              <button type="button" onClick={() => setAnalysisMode('standard')} className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest" style={{ backgroundColor: activeAnalysisMode === 'standard' ? 'rgba(34,211,238,0.16)' : 'transparent', color: activeAnalysisMode === 'standard' ? 'var(--accent-1)' : 'var(--text-secondary)' }}>Standard</button>
-              <button type="button" onClick={() => phalaModeAvailable && setAnalysisMode('phala_verified')} disabled={!phalaModeAvailable} className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest ${!phalaModeAvailable ? 'opacity-40 cursor-not-allowed' : ''}`} style={{ backgroundColor: activeAnalysisMode === 'phala_verified' ? 'rgba(59,130,246,0.18)' : 'transparent', color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)' }}>Verified</button>
+              <button type="button" onClick={() => setAnalysisMode('standard')} className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest" style={{ backgroundColor: activeAnalysisMode === 'standard' ? 'rgba(34,211,238,0.16)' : 'transparent', color: activeAnalysisMode === 'standard' ? 'var(--accent-1)' : 'var(--text-secondary)' }}>Local</button>
+              <button type="button" onClick={() => phalaModeAvailable && setAnalysisMode('phala_verified')} disabled={!phalaModeAvailable} className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest ${!phalaModeAvailable ? 'opacity-40 cursor-not-allowed' : ''}`} style={{ backgroundColor: activeAnalysisMode === 'phala_verified' ? 'rgba(59,130,246,0.18)' : 'transparent', color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)' }}>Verified Runtime (TEE)</button>
             </div>
           )}
           <div className="flex flex-col items-end gap-2">
@@ -411,12 +411,12 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
                 Review Request
               </button>
             )}
-            <button onClick={runAdvisor} disabled={advisorLoading || !graph} className="px-6 py-3 rounded-xl font-bold text-sm text-white" style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', opacity: (advisorLoading || !graph) ? 0.6 : 1 }}>{advisorLoading ? (activeAnalysisMode === 'phala_verified' ? 'Running verified analysis...' : 'Running analysis...') : (activeAnalysisMode === 'phala_verified' ? (verifiedReviewCompleted ? 'Run Verified' : 'Review Request') : 'Generate Recommendations')}</button>
+            <button onClick={runAdvisor} disabled={advisorLoading || !graph} className="px-6 py-3 rounded-xl font-bold text-sm text-white" style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', opacity: (advisorLoading || !graph) ? 0.6 : 1 }}>{advisorLoading ? (activeAnalysisMode === 'phala_verified' ? 'Running verified runtime analysis...' : 'Running local analysis...') : (activeAnalysisMode === 'phala_verified' ? (verifiedReviewCompleted ? 'Run Verified Runtime (TEE)' : 'Review Request') : 'Generate Recommendations')}</button>
             </div>
             {activeAnalysisMode === 'phala_verified' && (
               <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                 {verifiedReviewCompleted
-                  ? 'Run Verified sends immediately. Review Request reopens the payload preview.'
+                  ? 'Run Verified Runtime (TEE) sends immediately. Review Request reopens the payload preview.'
                   : 'The first verified run opens a request review before sending.'}
               </span>
             )}
@@ -440,7 +440,7 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
       {(recommendations.length > 0 || verifyResult || phalaRun) && (
         <div className="rounded-2xl p-5 space-y-4" style={{ backgroundColor: 'var(--bg-card)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)'}` }}>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3 text-sm">
-            <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Analysis Route</span><span className="font-mono text-xs" style={{ color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-primary)' }}>{activeAnalysisMode === 'phala_verified' ? 'Verified' : 'Standard API'}</span></div>
+            <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Execution Mode</span><span className="font-mono text-xs" style={{ color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-primary)' }}>{activeAnalysisMode === 'phala_verified' ? 'Verified Runtime (TEE)' : 'Local'}</span></div>
             <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Verification</span><span className="font-mono text-xs" style={{ color: verifyResult?.ok ? '#22c55e' : '#f97316' }}>{verifyResult ? (verifyResult.ok ? 'Verified' : 'Verification failed') : 'Pending'}</span></div>
             <div className="flex items-center justify-between"><span style={{ color: 'var(--text-secondary)' }}>Candidates</span><span className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{recommendations.length}</span></div>
           </div>

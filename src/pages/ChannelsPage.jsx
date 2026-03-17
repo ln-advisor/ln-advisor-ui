@@ -522,7 +522,6 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
     const buildOutgoingInspector = ({
         mode,
         propsPayload,
-        phalaTelemetry,
         standardResponse = null,
         phalaResponse = null,
         networkInAvgPpm = null,
@@ -530,7 +529,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
     }) => {
         if (mode === 'phala_verified') {
             const baseUrl = getPhalaTransportBaseUrl();
-            const recommendBody = { telemetry: phalaTelemetry };
+            const recommendBody = { telemetry: propsPayload };
             const requests = [
                 {
                     label: 'Recommend',
@@ -563,7 +562,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             }
 
             return {
-                route: 'Verified',
+                route: 'Verified Runtime (TEE)',
                 transport: import.meta.env.DEV ? 'Browser -> Vite proxy -> verified service' : 'Browser -> verified service',
                 destination: baseUrl,
                 requests,
@@ -604,7 +603,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         }
 
         return {
-            route: 'Standard API',
+            route: 'Local',
             transport: 'Browser -> local API server',
             destination: baseUrl,
             requests,
@@ -666,27 +665,12 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         });
 
         const propsSnapshot = applyPrivacyPolicy(normalizedSnapshot, 'feature_only');
-        const phalaTelemetry = {
-            nodeAlias: nodeInfo?.alias || nodeInfo?.identity_pubkey || 'tapvolt-node',
-            channels: [{
-                channelId: selectedChannel.chanId,
-                peerPubkey: selectedChannel.peerPubkey,
-                active: selectedChannel?.active !== false,
-                localBalanceSat: Number(selectedChannel?.local || selectedChannel?.localBalance || selectedChannel?.local_balance || 0),
-                remoteBalanceSat: Number(selectedChannel?.remote || selectedChannel?.remoteBalance || selectedChannel?.remote_balance || 0),
-                outboundFeePpm: getFeeRatePpm(selectedChannel.myPolicy) ?? 0,
-                forwardCount: Number(currentChannelStats?.fwdsOut || 0),
-                revenueSat: Number(currentChannelStats?.feeOutSats || 0),
-                failedForwardCount: 0,
-            }],
-        };
 
         return {
             rawTelemetry,
             rawSnapshot,
             normalizedSnapshot,
             propsSnapshot,
-            phalaTelemetry,
         };
     };
 
@@ -696,7 +680,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         try {
             setPropsLoading(true);
             setPropsError(null);
-            const phalaResponse = await runPhalaVerifiedRecommendation(preparedReview.phalaTelemetry);
+            const phalaResponse = await runPhalaVerifiedRecommendation(preparedReview.propsSnapshot);
             const recommendation = extractFeeRecommendation(phalaResponse.recommend);
 
             if (!recommendation) {
@@ -712,7 +696,6 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 outgoingInspector: buildOutgoingInspector({
                     mode: 'phala_verified',
                     propsPayload: preparedReview.propsSnapshot,
-                    phalaTelemetry: preparedReview.phalaTelemetry,
                     phalaResponse,
                     networkInAvgPpm: preparedReview.networkInAvgPpm,
                     networkOutAvgPpm: preparedReview.networkOutAvgPpm,
@@ -756,7 +739,6 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 rawSnapshot,
                 normalizedSnapshot,
                 propsSnapshot,
-                phalaTelemetry,
             } = buildSelectedChannelAnalysisInputs();
 
             setLastTelemetry(rawTelemetry);
@@ -767,7 +749,6 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 outgoingInspector: buildOutgoingInspector({
                     mode: activeAnalysisMode,
                     propsPayload: propsSnapshot,
-                    phalaTelemetry,
                     networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
                     networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
                 }),
@@ -776,11 +757,9 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
             if (activeAnalysisMode === 'phala_verified') {
                 const preparedReview = {
                     propsSnapshot,
-                    phalaTelemetry,
                     outgoingInspector: buildOutgoingInspector({
                         mode: 'phala_verified',
                         propsPayload: propsSnapshot,
-                        phalaTelemetry,
                         networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
                         networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
                     }),
@@ -817,7 +796,6 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 outgoingInspector: buildOutgoingInspector({
                     mode: activeAnalysisMode,
                     propsPayload: propsSnapshot,
-                    phalaTelemetry,
                     standardResponse: res,
                     networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
                     networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
@@ -1726,7 +1704,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                         color: activeAnalysisMode === 'standard' ? 'var(--accent-1)' : 'var(--text-secondary)',
                                                     }}
                                                 >
-                                                    Standard
+                                                    Local
                                                 </button>
                                                 <button
                                                     type="button"
@@ -1737,14 +1715,14 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                         backgroundColor: activeAnalysisMode === 'phala_verified' ? 'rgba(59,130,246,0.18)' : 'transparent',
                                                         color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)',
                                                     }}
-                                                    title={phalaModeAvailable ? 'Use the verified route' : (PHALA_UI_CONFIG.reason || 'Verified route is unavailable')}
+                                                    title={phalaModeAvailable ? 'Use the verified runtime route' : (PHALA_UI_CONFIG.reason || 'Verified runtime route is unavailable')}
                                                 >
-                                                    Verified
+                                                    Verified Runtime (TEE)
                                                 </button>
                                             </div>
                                             {!phalaModeAvailable && (
                                                 <span className="text-[10px]" style={{ color: darkMode ? '#fda4af' : '#9f1239' }}>
-                                                    {PHALA_UI_CONFIG.reason || 'Verified route is unavailable.'}
+                                                    {PHALA_UI_CONFIG.reason || 'Verified runtime route is unavailable.'}
                                                 </span>
                                             )}
                                         </div>
@@ -1792,9 +1770,9 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                 style={{ background: 'linear-gradient(135deg, var(--accent-1), var(--accent-2))', color: '#fff' }}
                                             >
                                                 {propsLoading
-                                                    ? (activeAnalysisMode === 'phala_verified' ? 'Running verified analysis...' : 'Running analysis...')
+                                                    ? (activeAnalysisMode === 'phala_verified' ? 'Running verified runtime analysis...' : 'Running local analysis...')
                                                     : activeAnalysisMode === 'phala_verified'
-                                                        ? (verifiedReviewCompleted ? 'Run Verified' : 'Review Request')
+                                                        ? (verifiedReviewCompleted ? 'Run Verified Runtime (TEE)' : 'Review Request')
                                                         : propsRecommendation
                                                             ? 'Re-run Analysis'
                                                             : 'Analyze Channel'}
@@ -1803,7 +1781,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                         {activeAnalysisMode === 'phala_verified' && (
                                             <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                                                 {verifiedReviewCompleted
-                                                    ? 'Run Verified sends immediately. Review Request reopens the payload preview.'
+                                                    ? 'Run Verified Runtime (TEE) sends immediately. Review Request reopens the payload preview.'
                                                     : 'The first verified run opens a request review before sending.'}
                                             </span>
                                         )}
@@ -1832,7 +1810,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                                 <div className="flex items-center gap-2">
                                                     {verifyResult?.ok && (
                                                         <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-bold uppercase tracking-widest">
-                                                            Verified
+                                                            Verified Runtime (TEE)
                                                         </span>
                                                     )}
                                                     <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${propsRecommendation.action?.toLowerCase() === 'lower' || propsRecommendation.action?.toLowerCase() === 'decrease' ? 'bg-rose-500/20 text-rose-500' :
@@ -1875,9 +1853,9 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                                             </div>
 
                                             <div className="flex items-center justify-between">
-                                                <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Analysis Route</span>
+                                                <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Execution Mode</span>
                                                 <span className="font-mono text-xs" style={{ color: activeAnalysisMode === 'phala_verified' ? '#60a5fa' : 'var(--text-secondary)' }}>
-                                                    {activeAnalysisMode === 'phala_verified' ? 'Verified' : 'Standard API'}
+                                                    {activeAnalysisMode === 'phala_verified' ? 'Verified Runtime (TEE)' : 'Local'}
                                                 </span>
                                             </div>
 

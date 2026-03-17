@@ -6,6 +6,7 @@ const PHALA_MINIMAL_APP_URL = String(
   .trim()
   .replace(/\/+$/, "");
 const PHALA_UI_FLAG = String(import.meta.env.VITE_ENABLE_PHALA_VERIFIED_UI || "").trim().toLowerCase();
+const PHALA_DEBUG_LOGS_FLAG = String(import.meta.env.VITE_ENABLE_PHALA_DEBUG_LOGS || "").trim().toLowerCase();
 const PHALA_DEV_PROXY_BASE = "/__phala";
 
 const isTruthy = (value: string): boolean => ["1", "true", "yes", "on"].includes(value);
@@ -24,6 +25,13 @@ export interface PhalaVerifiedRunResult {
   attestation: any;
   verify: any;
 }
+
+const isPhalaDebugLogsEnabled = (): boolean => isTruthy(PHALA_DEBUG_LOGS_FLAG);
+
+const appendDebugQuery = (path: string): string => {
+  if (!isPhalaDebugLogsEnabled()) return path;
+  return path.includes("?") ? `${path}&debug=true` : `${path}?debug=true`;
+};
 
 const ensureBaseUrl = (): string => {
   if (!PHALA_MINIMAL_APP_URL) {
@@ -106,7 +114,7 @@ export const getPhalaHealth = async <T = unknown>(): Promise<T> => getJson<T>("/
 export const runPhalaVerifiedRecommendation = async (
   telemetry: unknown
 ): Promise<PhalaVerifiedRunResult> => {
-  const recommend = await postJson<any>("/api/recommend?full=true", { telemetry });
+  const recommend = await postJson<any>(appendDebugQuery("/api/recommend?full=true"), { telemetry });
   const healthPromise = getPhalaHealth().catch(() => null);
   const info = await getJson<any>("/info?full=true");
   const attestation = await getJson<any>("/attestation?full=true");
@@ -119,11 +127,26 @@ export const runPhalaVerifiedRecommendation = async (
     liveAppAttestation: attestation,
   });
 
-  return {
+  const result = {
     health: await healthPromise,
     recommend,
     info,
     attestation,
     verify,
   };
+
+  if (isPhalaDebugLogsEnabled()) {
+    console.groupCollapsed("[LN Advisor] Verified Runtime Debug");
+    console.info("Submitted telemetry", telemetry);
+    console.info("Transformed snapshot", result.recommend?.transformedSnapshot);
+    console.info("Recommendation set", result.recommend?.recommendationSet);
+    console.info("Debug trace", result.recommend?.debugTrace || null);
+    console.info("Health", result.health);
+    console.info("Runtime info", result.info);
+    console.info("Runtime attestation", result.attestation);
+    console.info("Verify", result.verify);
+    console.groupEnd();
+  }
+
+  return result;
 };
