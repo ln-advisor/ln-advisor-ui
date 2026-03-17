@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 const ReviewBeforeSendModal = ({
   isOpen,
@@ -8,16 +9,18 @@ const ReviewBeforeSendModal = ({
   title = 'Review Before Send',
   requestPlan = null,
   sending = false,
+  error = null,
 }) => {
   if (!isOpen || !requestPlan) return null;
 
   const requests = Array.isArray(requestPlan.requests) ? requestPlan.requests : [];
   const primaryRequest = requests.find((request) => request.method === 'POST' && request.body) || requests[0] || null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-6">
       <div
         className="w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-3xl border"
+        onClick={(event) => event.stopPropagation()}
         style={{
           backgroundColor: 'var(--bg-card)',
           borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.1)',
@@ -36,6 +39,30 @@ const ReviewBeforeSendModal = ({
         </div>
 
         <div className="max-h-[70vh] overflow-y-auto p-6 space-y-6">
+          {sending && (
+            <div
+              className="rounded-xl border px-4 py-3 text-sm"
+              style={{
+                borderColor: darkMode ? 'rgba(96,165,250,0.24)' : 'rgba(37,99,235,0.18)',
+                backgroundColor: darkMode ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.06)',
+                color: 'var(--text-primary)',
+              }}
+            >
+              Sending request. The result will appear in the page when the verified run completes.
+            </div>
+          )}
+          {error && !sending && (
+            <div
+              className="rounded-xl border px-4 py-3 text-sm"
+              style={{
+                borderColor: darkMode ? 'rgba(248,113,113,0.26)' : 'rgba(220,38,38,0.18)',
+                backgroundColor: darkMode ? 'rgba(127,29,29,0.18)' : 'rgba(254,242,242,1)',
+                color: darkMode ? '#fca5a5' : '#991b1b',
+              }}
+            >
+              {error}
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 text-sm">
             <div className="flex items-center justify-between gap-3">
               <span style={{ color: 'var(--text-secondary)' }}>Route</span>
@@ -128,7 +155,8 @@ const ReviewBeforeSendModal = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

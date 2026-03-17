@@ -164,7 +164,6 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
 
     setAdvisorLoading(true);
     setAdvisorError(null);
-    setPendingPhalaReview(null);
 
     try {
       const phalaResponse = await runPhalaVerifiedRecommendation(preparedRun.propsPayload);
@@ -187,6 +186,7 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
       setVerifyResult(phalaResponse.verify);
       setPhalaRun(phalaResponse);
       setPipelineData((prev) => ({ ...prev, outgoingInspector: buildOutgoingInspector({ mode: 'phala_verified', propsPayload: preparedRun.propsPayload, phalaResponse }) }));
+      setPendingPhalaReview(null);
     } catch (err) {
       console.error('[Opening Recommendations] advisor failed', err);
       setAdvisorError(err.message || 'Advisor analysis failed.');
@@ -437,6 +437,7 @@ const RecommendationsPage = ({ lnc, darkMode, mockSnapshot = null }) => {
         title="Review Opening Recommendation Request"
         requestPlan={pendingPhalaReview?.outgoingInspector || null}
         sending={advisorLoading}
+        error={advisorError}
       />
     </div>
   );

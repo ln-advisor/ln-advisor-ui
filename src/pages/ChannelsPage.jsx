@@ -802,7 +802,6 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
         try {
             setPropsLoading(true);
             setPropsError(null);
-            setPendingPhalaReview(null);
             const phalaResponse = await runPhalaVerifiedRecommendation(preparedReview.phalaTelemetry);
             const recommendation = extractFeeRecommendation(phalaResponse.recommend);
 
@@ -824,6 +823,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                     networkOutAvgPpm: preparedReview.networkOutAvgPpm,
                 }),
             }));
+            setPendingPhalaReview(null);
         } catch (err) {
             console.error('Analysis failed:', err);
             setPropsRecommendation(null);
@@ -2129,6 +2129,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                         title="Review Channel Analysis Request"
                         requestPlan={pendingPhalaReview?.outgoingInspector || null}
                         sending={propsLoading}
+                        error={propsError}
                     />
                 </div>
                 , document.body)}
