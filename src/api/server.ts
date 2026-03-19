@@ -135,6 +135,18 @@ const parseBooleanEnv = (value: string | undefined): boolean =>
 const isReleasedSignerModeEnabled = (): boolean =>
   parseBooleanEnv(process.env.API_REQUIRE_RELEASED_SIGNER);
 
+const isConditionalRecallMockModeEnabled = (): boolean => {
+  if (parseBooleanEnv(process.env.API_ENABLE_CONDITIONAL_RECALL_MOCK)) {
+    return true;
+  }
+
+  const snapshotModeIsMock =
+    process.env.LIGHTNING_SNAPSHOT_MODE?.trim().toLowerCase() === "mock";
+  const mockUiEnabled = parseBooleanEnv(process.env.VITE_ENABLE_MOCK_LIGHTNING_UI);
+
+  return snapshotModeIsMock && mockUiEnabled;
+};
+
 const readRequiredEnv = (name: string): string => {
   const raw = process.env[name];
   if (!raw || raw.trim().length === 0) {
@@ -697,8 +709,7 @@ const buildRecommendationBundle = async (
 };
 
 export function createApiServer(options: ApiServerOptions = {}): http.Server {
-  const useMockConditionalRecall =
-    process.env.LIGHTNING_SNAPSHOT_MODE?.trim().toLowerCase() === "mock";
+  const useMockConditionalRecall = isConditionalRecallMockModeEnabled();
   const conditionalRecallSessionManager =
     options.conditionalRecallSessionManager ||
     (useMockConditionalRecall
