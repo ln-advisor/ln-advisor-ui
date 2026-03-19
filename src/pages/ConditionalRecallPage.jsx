@@ -113,6 +113,23 @@ const SectionCard = ({ title, subtitle, right, children }) => (
   </section>
 );
 
+const ExplainerTile = ({ title, body }) => (
+  <div
+    className="rounded-xl border p-4"
+    style={{
+      borderColor: 'var(--border-color)',
+      backgroundColor: 'var(--bg-card-2)',
+    }}
+  >
+    <p className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>
+      {title}
+    </p>
+    <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-primary)' }}>
+      {body}
+    </p>
+  </div>
+);
+
 const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null }) => {
   const isMockMode = !lnc?.lnd?.lightning && Boolean(mockSnapshot);
   const [formState, setFormState] = useState(loadInitialFormState);
@@ -389,6 +406,20 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
             Mock mode is active. The local API uses deterministic forwarding history and HTLC stream data derived from the mock snapshot. No LNC or live LND REST endpoint is required for this page.
           </div>
         ) : null}
+        <div className="mb-6 grid gap-4 lg:grid-cols-3">
+          <ExplainerTile
+            title="What This Does"
+            body="This page runs a short lived traffic analysis session. It loads a forwarding history baseline, watches live HTLC forwarding activity for a bounded window, and reduces that stream into per channel traffic pressure."
+          />
+          <ExplainerTile
+            title="What You Get"
+            body="The output is a draft fee review. Each channel gets aggregate counts, friction metrics, and if the thresholds are met, a suggested fee raise or fee decrease for manual review."
+          />
+          <ExplainerTile
+            title="What Gets Forgotten"
+            body="Raw event context is held only during the live session. The final result keeps channel level aggregates and suggestions only. It does not keep raw HTLC paths, hashes, or per event routing detail."
+          />
+        </div>
         <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
           <div className="grid gap-4 md:grid-cols-2">
             <label className="flex flex-col gap-2">
@@ -645,6 +676,20 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
           </div>
         ) : (
           <div className="space-y-4">
+            <div className="grid gap-4 lg:grid-cols-3">
+              <ExplainerTile
+                title="How Suggestions Are Made"
+                body="High attempts with repeated forward or link failures increase friction. Higher failed amount and lower success rate increase confidence. Low activity with a relatively high current fee can trigger a fee decrease."
+              />
+              <ExplainerTile
+                title="How To Read Friction"
+                body="Friction is a simple 0 to 100 pressure score. Higher values mean the channel saw more failed forwarding relative to successful settlement and observed volume during the session window."
+              />
+              <ExplainerTile
+                title="How To Use This"
+                body="Treat the output as a review queue, not an automatic action. Look at the suggested channels first, compare them with your current routing posture, then decide whether to update fees manually."
+              />
+            </div>
             <div className="grid gap-4 md:grid-cols-3">
               <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)' }}>
                 <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>Suggestions</p>
@@ -663,6 +708,30 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
                 <p className="mt-2 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
                   {sessionResult.collectionSummary.windowStart || '—'}<br />{sessionResult.collectionSummary.windowEnd || '—'}
                 </p>
+              </div>
+            </div>
+
+            <div
+              className="rounded-xl border p-4 text-sm"
+              style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)' }}
+            >
+              <div className="grid gap-3 lg:grid-cols-4">
+                <div>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Attempts</p>
+                  <p style={{ color: 'var(--text-secondary)' }}>Forward attempts seen in the baseline plus live session.</p>
+                </div>
+                <div>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Settles</p>
+                  <p style={{ color: 'var(--text-secondary)' }}>Forward events that completed successfully for that channel.</p>
+                </div>
+                <div>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Failures</p>
+                  <p style={{ color: 'var(--text-secondary)' }}>Forward fail and link fail counts observed during the live collection window.</p>
+                </div>
+                <div>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Volume Pressure</p>
+                  <p style={{ color: 'var(--text-secondary)' }}>Share of observed volume that ended up in failed HTLC flow during the session.</p>
+                </div>
               </div>
             </div>
 
