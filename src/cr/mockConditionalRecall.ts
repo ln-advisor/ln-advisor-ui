@@ -1,5 +1,6 @@
 import { getMockLightningSnapshot } from "../connectors/mockLightningSnapshot";
 import { createConditionalRecallSessionManager } from "./sessionManager";
+import { conditionalRecallServerDebugLog } from "./serverDebug";
 import type {
   ConditionalRecallAnalyzerDependencies,
   ConditionalRecallSessionManager,
@@ -74,6 +75,9 @@ const buildMockForwardingHistory = (): ForwardingHistoryEventLike[] => {
 const buildMockDependencies = (): Partial<ConditionalRecallAnalyzerDependencies> => ({
   fetchForwardingHistory: async (_config, _lookbackDays, onProgress) => {
     const events = buildMockForwardingHistory();
+    conditionalRecallServerDebugLog("mock forwarding history requested", {
+      eventCount: events.length,
+    });
     if (onProgress) {
       onProgress(events.length);
     }
@@ -83,6 +87,9 @@ const buildMockDependencies = (): Partial<ConditionalRecallAnalyzerDependencies>
     options: RouterHtlcEventsStreamOptions
   ) => {
     let closed = false;
+    conditionalRecallServerDebugLog("mock htlc stream opened", {
+      eventCount: MOCK_FORWARD_EVENTS.length,
+    });
     const timers = MOCK_FORWARD_EVENTS.map((event, index) =>
       setTimeout(() => {
         if (closed) return;
@@ -95,6 +102,7 @@ const buildMockDependencies = (): Partial<ConditionalRecallAnalyzerDependencies>
       close: () => {
         closed = true;
         timers.forEach((timer) => clearTimeout(timer));
+        conditionalRecallServerDebugLog("mock htlc stream closed");
       },
     };
   },

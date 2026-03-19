@@ -4,6 +4,7 @@ import {
   fetchForwardingHistory,
   testRouterStreamConnectivity,
 } from "./routerHtlcEventsClient";
+import { conditionalRecallServerDebugLog } from "./serverDebug";
 import type {
   ConditionalRecallAnalyzerDependencies,
   ConditionalRecallConfig,
@@ -39,8 +40,15 @@ export const createConditionalRecallSessionManager = (
 
   return {
     async testConfig(routerConfig): Promise<ConditionalRecallConfigTestResponse> {
+      conditionalRecallServerDebugLog("config test start", {
+        restHost: routerConfig.restHost,
+        allowSelfSigned: routerConfig.allowSelfSigned,
+      });
       await fetchHistory(routerConfig, 1);
       await testStreamConnectivity(routerConfig);
+      conditionalRecallServerDebugLog("config test success", {
+        restHost: routerConfig.restHost,
+      });
       return {
         ok: true,
         restHost: routerConfig.restHost,
@@ -83,6 +91,13 @@ export const createConditionalRecallSessionManager = (
       const sessionId = randomUUID();
       const analyzer = new HtlcTrafficAnalyzer(safeConfig, dependencies);
       const initialStatus = analyzer.getStatus(sessionId);
+      conditionalRecallServerDebugLog("session created", {
+        sessionId,
+        restHost: safeConfig.routerConfig.restHost,
+        lookbackDays: safeConfig.lookbackDays,
+        liveWindowSeconds: safeConfig.liveWindowSeconds,
+        channelHintCount: safeConfig.channelHints.length,
+      });
       sessions.set(sessionId, {
         analyzer,
         status: initialStatus,
@@ -97,6 +112,11 @@ export const createConditionalRecallSessionManager = (
           record.result = result;
           record.status = analyzer.getStatus(sessionId);
           record.analyzer = null;
+          conditionalRecallServerDebugLog("session completed", {
+            sessionId,
+            aggregateChannels: result.aggregate.channels.length,
+            suggestionCount: result.suggestions.length,
+          });
         })
         .catch(async (error) => {
           const record = sessions.get(sessionId);
@@ -111,6 +131,10 @@ export const createConditionalRecallSessionManager = (
           await analyzer.fail(error instanceof Error ? error.message : String(error));
           record.status = analyzer.getStatus(sessionId);
           record.analyzer = null;
+          conditionalRecallServerDebugLog("session failed", {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
 
       return {
@@ -126,18 +150,30 @@ export const createConditionalRecallSessionManager = (
       if (record.analyzer) {
         record.status = record.analyzer.getStatus(sessionId);
       }
+      conditionalRecallServerDebugLog("status requested", {
+        sessionId,
+        state: record.status.state,
+      });
       return record.status;
     },
 
     getResult(sessionId): ConditionalRecallResult | null {
       const record = sessions.get(sessionId);
       if (!record) return null;
+      conditionalRecallServerDebugLog("result requested", {
+        sessionId,
+        available: Boolean(record.result),
+      });
       return record.result;
     },
 
     async cancelSession(sessionId): Promise<ConditionalRecallStatus | null> {
       const record = sessions.get(sessionId);
       if (!record) return null;
+      conditionalRecallServerDebugLog("cancel requested", {
+        sessionId,
+        state: record.status.state,
+      });
       if (record.analyzer) {
         await record.analyzer.cancel();
         record.status = record.analyzer.getStatus(sessionId);

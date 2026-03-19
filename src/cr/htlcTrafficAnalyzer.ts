@@ -6,6 +6,7 @@ import {
   fetchForwardingHistory as fetchForwardingHistoryDefault,
   openRouterHtlcEventsStream as openRouterHtlcEventsStreamDefault,
 } from "./routerHtlcEventsClient";
+import { conditionalRecallServerDebugLog } from "./serverDebug";
 import type {
   ChannelTrafficStats,
   ConditionalRecallAggregateChannel,
@@ -145,6 +146,12 @@ export class HtlcTrafficAnalyzer {
       return this.completedResult;
     }
 
+    conditionalRecallServerDebugLog("analyzer start", {
+      restHost: this.config.routerConfig.restHost,
+      lookbackDays: this.config.lookbackDays,
+      liveWindowSeconds: this.config.liveWindowSeconds,
+      channelHintCount: this.config.channelHints.length,
+    });
     this.transition("starting");
     this.transition("collecting_history");
 
@@ -156,6 +163,10 @@ export class HtlcTrafficAnalyzer {
       }
     );
     this.ingestForwardingHistoryRows(history);
+    conditionalRecallServerDebugLog("history loaded", {
+      historyEventsProcessed: this.progress.historyEventsProcessed,
+      channelsTracked: this.progress.channelsTracked,
+    });
 
     if (this.canceled) {
       throw new Error("Conditional Recall session canceled.");
@@ -169,6 +180,17 @@ export class HtlcTrafficAnalyzer {
         if (this.canceled || this.state !== "streaming_live") return;
         if (this.ingestHtlcEvent(event)) {
           this.progress.liveEventsProcessed += 1;
+          conditionalRecallServerDebugLog("live event accepted", {
+            eventType: event?.event_type || null,
+            incomingChannelId: event?.incoming_channel_id || null,
+            outgoingChannelId: event?.outgoing_channel_id || null,
+            hasForwardEvent: Boolean(event?.forward_event),
+            hasSettleEvent: Boolean(event?.settle_event),
+            hasForwardFailEvent: Boolean(event?.forward_fail_event),
+            hasLinkFailEvent: Boolean(event?.link_fail_event),
+            liveEventsProcessed: this.progress.liveEventsProcessed,
+            channelsTracked: this.progress.channelsTracked,
+          });
         }
       },
       onError: (error) => {
@@ -332,6 +354,13 @@ export class HtlcTrafficAnalyzer {
     if (this.state !== "failed") {
       this.errorMessage = reason;
     }
+    conditionalRecallServerDebugLog("analyzer canceled", {
+      reason,
+      state: this.state,
+      historyEventsProcessed: this.progress.historyEventsProcessed,
+      liveEventsProcessed: this.progress.liveEventsProcessed,
+      channelsTracked: this.progress.channelsTracked,
+    });
     this.transition("canceled");
     this.releaseRuntimeResources();
     this.statsByChannelId.clear();
@@ -340,6 +369,12 @@ export class HtlcTrafficAnalyzer {
 
   async fail(reason: string): Promise<void> {
     this.errorMessage = reason;
+    conditionalRecallServerDebugLog("analyzer failed", {
+      reason,
+      historyEventsProcessed: this.progress.historyEventsProcessed,
+      liveEventsProcessed: this.progress.liveEventsProcessed,
+      channelsTracked: this.progress.channelsTracked,
+    });
     this.transition("failed");
     this.releaseRuntimeResources();
     this.statsByChannelId.clear();
@@ -385,6 +420,13 @@ export class HtlcTrafficAnalyzer {
         channelsTracked: aggregateChannels.length,
       },
     };
+    conditionalRecallServerDebugLog("aggregate flushed", {
+      aggregateChannels: aggregate.channels.length,
+      suggestionCount: suggestions.length,
+      windowStart: aggregate.windowStart,
+      windowEnd: aggregate.windowEnd,
+      topSuggestions: suggestions.slice(0, 3),
+    });
 
     this.statsByChannelId.clear();
     this.progress.channelsTracked = 0;

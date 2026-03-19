@@ -6,6 +6,7 @@ import {
   postConditionalRecallSessionCancel,
   postConditionalRecallSessionStart,
 } from '../api/telemetryClient';
+import { conditionalRecallDebugLog } from '../cr/debug';
 
 const STORAGE_KEY = 'lnadvisor.conditionalRecall.settings';
 const MOCK_REST_HOST = 'mock-lightning.local';
@@ -156,6 +157,9 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
 
   useEffect(() => {
     if (!isMockMode) return;
+    conditionalRecallDebugLog('mock mode enabled', {
+      restHost: MOCK_REST_HOST,
+    });
     setFormState((current) => ({
       ...current,
       restHost: current.restHost || MOCK_REST_HOST,
@@ -176,6 +180,10 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
             .filter((policy) => readText(policy.directionPubKey || policy.direction_pub_key).toLowerCase() === localPubkey)
             .map((policy) => [readText(policy.channelId || policy.channel_id), readPolicyPpm(policy)])
         );
+        conditionalRecallDebugLog('loaded mock fee hints', {
+          channelCount: Array.isArray(mockSnapshot.channels) ? mockSnapshot.channels.length : 0,
+          feeHintCount: Object.keys(nextFeeMap).length,
+        });
         setFeePpmByChannelId(nextFeeMap);
         setFeePpmLoading(false);
         return;
@@ -214,6 +222,10 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
 
         if (!cancelled) {
           setFeePpmByChannelId(Object.fromEntries(entries.filter(([channelId]) => channelId)));
+          conditionalRecallDebugLog('loaded live fee hints', {
+            channelCount: Array.isArray(nodeChannels) ? nodeChannels.length : 0,
+            feeHintCount: entries.filter(([, fee]) => fee !== null && fee !== undefined).length,
+          });
         }
       } catch (_error) {
         if (!cancelled) {
@@ -277,21 +289,33 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
       return undefined;
     }
 
+    conditionalRecallDebugLog('polling session', {
+      sessionId: activeSessionId,
+      state: sessionStatus.state,
+    });
+
     let cancelled = false;
     const poll = async () => {
       try {
         const response = await getConditionalRecallSessionStatus(activeSessionId);
         if (cancelled) return;
         setSessionStatus(response.status);
+        conditionalRecallDebugLog('status response', response.status);
 
         if (response.status.state === 'completed') {
           const resultResponse = await getConditionalRecallSessionResult(activeSessionId);
           if (!cancelled) {
             setSessionResult(resultResponse.result);
+            conditionalRecallDebugLog('result response', {
+              sessionId: activeSessionId,
+              aggregateChannels: resultResponse.result?.aggregate?.channels?.length || 0,
+              suggestionCount: resultResponse.result?.suggestions?.length || 0,
+            });
           }
         }
       } catch (error) {
         if (!cancelled) {
+          conditionalRecallDebugLog('poll failed', error instanceof Error ? { message: error.message, stack: error.stack } : error);
           setPageError(error instanceof Error ? error.message : String(error));
         }
       }
@@ -320,6 +344,11 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
     setConfigTest(null);
     setConfigTestError(null);
     setPageError(null);
+    conditionalRecallDebugLog('config test start', {
+      restHost: isMockMode ? (formState.restHost || MOCK_REST_HOST) : formState.restHost,
+      allowSelfSigned: formState.allowSelfSigned,
+      isMockMode,
+    });
     try {
       const response = await postConditionalRecallConfigTest({
         restHost: isMockMode ? (formState.restHost || MOCK_REST_HOST) : formState.restHost,
@@ -327,7 +356,9 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
         allowSelfSigned: formState.allowSelfSigned,
       });
       setConfigTest(response);
+      conditionalRecallDebugLog('config test success', response);
     } catch (error) {
+      conditionalRecallDebugLog('config test failed', error instanceof Error ? { message: error.message, stack: error.stack } : error);
       setConfigTestError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsTestingConfig(false);
@@ -339,6 +370,18 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
     setPageError(null);
     setSessionResult(null);
     setConfigTestError(null);
+    conditionalRecallDebugLog('session start requested', {
+      restHost: isMockMode ? (formState.restHost || MOCK_REST_HOST) : formState.restHost,
+      lookbackDays: Number(formState.lookbackDays),
+      liveWindowSeconds: Number(formState.liveWindowSeconds),
+      channelHintCount: channelHints.length,
+      isMockMode,
+      channelHints: channelHints.map((hint) => ({
+        channelRef: hint.channelRef,
+        currentFeePpm: hint.currentFeePpm,
+        label: hint.label,
+      })),
+    });
 
     try {
       const response = await postConditionalRecallSessionStart({
@@ -358,7 +401,9 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
 
       setActiveSessionId(response.sessionId);
       setSessionStatus(response.status);
+      conditionalRecallDebugLog('session start response', response);
     } catch (error) {
+      conditionalRecallDebugLog('session start failed', error instanceof Error ? { message: error.message, stack: error.stack } : error);
       setPageError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsStarting(false);
@@ -367,15 +412,22 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
 
   const handleCancel = async () => {
     if (!activeSessionId) return;
+    conditionalRecallDebugLog('cancel requested', { sessionId: activeSessionId });
     try {
       const response = await postConditionalRecallSessionCancel(activeSessionId);
       setSessionStatus(response.status);
+      conditionalRecallDebugLog('cancel response', response.status);
     } catch (error) {
+      conditionalRecallDebugLog('cancel failed', error instanceof Error ? { message: error.message, stack: error.stack } : error);
       setPageError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const handleReset = () => {
+    conditionalRecallDebugLog('page reset', {
+      hadSessionId: activeSessionId,
+      hadResult: Boolean(sessionResult),
+    });
     setConfigTest(null);
     setConfigTestError(null);
     setActiveSessionId(null);

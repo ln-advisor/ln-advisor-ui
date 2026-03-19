@@ -44,6 +44,7 @@ import {
   createConditionalRecallSessionManager,
 } from "../cr/sessionManager";
 import { createMockConditionalRecallSessionManager } from "../cr/mockConditionalRecall";
+import { conditionalRecallServerDebugLog } from "../cr/serverDebug";
 import type {
   ConditionalRecallChannelHint,
   ConditionalRecallConfig,
@@ -717,6 +718,9 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
 
       if (req.method === "GET" && crRoute) {
         if (crRoute.isResultPath) {
+          conditionalRecallServerDebugLog("api result fetch", {
+            sessionId: crRoute.sessionId,
+          });
           const result = conditionalRecallSessionManager.getResult(crRoute.sessionId);
           if (!result) {
             const status = conditionalRecallSessionManager.getStatus(crRoute.sessionId);
@@ -735,6 +739,9 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
           return;
         }
 
+        conditionalRecallServerDebugLog("api status fetch", {
+          sessionId: crRoute.sessionId,
+        });
         const status = conditionalRecallSessionManager.getStatus(crRoute.sessionId);
         if (!status) {
           sendJson(res, 404, { ok: false, error: "Conditional Recall session not found." });
@@ -755,6 +762,10 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
 
       if (url.pathname === "/api/cr/config/test") {
         const routerConfig = parseConditionalRecallRouterConfig(body.routerConfig);
+        conditionalRecallServerDebugLog("api config test request", {
+          restHost: routerConfig.restHost,
+          allowSelfSigned: routerConfig.allowSelfSigned,
+        });
         const response = await conditionalRecallSessionManager.testConfig(routerConfig);
         sendJson(res, 200, response);
         return;
@@ -762,6 +773,12 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
 
       if (url.pathname === "/api/cr/sessions") {
         const config = parseConditionalRecallConfig(body);
+        conditionalRecallServerDebugLog("api session start request", {
+          restHost: config.routerConfig.restHost,
+          lookbackDays: config.lookbackDays,
+          liveWindowSeconds: config.liveWindowSeconds,
+          channelHintCount: config.channelHints.length,
+        });
         const response = await conditionalRecallSessionManager.startSession(config);
         sendJson(res, 200, response);
         return;
@@ -769,6 +786,7 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
 
       if (url.pathname.match(/^\/api\/cr\/sessions\/[^/]+\/cancel$/)) {
         const sessionId = decodeURIComponent(url.pathname.split("/")[4] || "");
+        conditionalRecallServerDebugLog("api cancel request", { sessionId });
         const status = await conditionalRecallSessionManager.cancelSession(sessionId);
         if (!status) {
           sendJson(res, 404, { ok: false, error: "Conditional Recall session not found." });
