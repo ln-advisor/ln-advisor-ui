@@ -20,7 +20,6 @@ import { getMockLightningSnapshot } from './connectors/mockLightningSnapshot';
 import GraphAnalysisPage from './pages/GraphAnalysisPage';
 import ChannelsPage from './pages/ChannelsPage';
 import RecommendationsPage from './pages/RecommendationsPage';
-import HomePage from './pages/HomePage';
 
 function App() {
   const mockLightningEnabled = String(import.meta.env.VITE_ENABLE_MOCK_LIGHTNING_UI || '').trim().toLowerCase() === 'true';
@@ -467,16 +466,6 @@ function App() {
               />
               <Routes>
                 <Route
-                  path="/"
-                  element={
-                    <HomePage
-                      darkMode={darkMode}
-                      isLoggedIn={false}
-                      onNavigateToConnect={() => setShowConnect(true)}
-                    />
-                  }
-                />
-                <Route
                   path="/graph"
                   element={
                     <LoginGate isLoggedIn={false} darkMode={darkMode} onNavigateToConnect={() => setShowConnect(true)}>
@@ -500,7 +489,8 @@ function App() {
                     </LoginGate>
                   }
                 />
-                <Route path="*" element={<Navigate to="/" replace />} />
+                <Route path="/" element={<Navigate to="/channels" replace />} />
+                <Route path="*" element={<Navigate to="/channels" replace />} />
               </Routes>
             </div>
           </div>
@@ -552,11 +542,11 @@ function App() {
             <NavBar darkMode={darkMode} isLoggedIn={true} />
 
             <Routes>
-              <Route path="/" element={<HomePage darkMode={darkMode} isLoggedIn={true} />} />
+              <Route path="/" element={<Navigate to="/channels" replace />} />
               <Route path="/graph" element={<GraphAnalysisPage lnc={lnc} darkMode={darkMode} />} />
               <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
               <Route path="/recommendations" element={<RecommendationsPage lnc={lnc} darkMode={darkMode} />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/channels" replace />} />
             </Routes>
 
             <PeersModal
