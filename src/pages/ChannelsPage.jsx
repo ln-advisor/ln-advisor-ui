@@ -5,6 +5,7 @@ import {
     postRecommend,
     postVerify,
     postAnalyzeGemini,
+    postFeeSuggestion,
 } from '../api/telemetryClient';
 import {
     getPhalaUiConfig,
@@ -663,18 +664,32 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
 
     const buildSelectedChannelAnalysisInputs = () => {
         const selectedChannelId = String(selectedChannel?.chanId || '');
-        const currentChannelStats = channelStats.get(selectedChannelId) || {
-            feeOutSats: 0,
-            fwdsOut: 0,
-        };
+        
+        // Filter forwarding history for the specific channel and recent time (7 days)
+        const sevenDaysAgo = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+        const filteredForwards = forwards.filter(f => {
+            const timestamp = Number(f.timestamp || 0);
+            return timestamp >= sevenDaysAgo && (
+                String(f.chanIdIn || f.chan_id_in) === selectedChannelId ||
+                String(f.chanIdOut || f.chan_id_out) === selectedChannelId
+            );
+        });
 
         const rawTelemetry = {
             nodeInfo,
-            forwardingHistory: forwards,
-            feePolicies: [{
-                channelId: selectedChannel.chanId,
-                feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
-            }],
+            forwardingHistory: filteredForwards,
+            feePolicies: [
+                {
+                    channelId: selectedChannel.chanId,
+                    directionPubKey: String(nodePubkey || '').toLowerCase(),
+                    feeRatePpm: getFeeRatePpm(selectedChannel.myPolicy)
+                },
+                {
+                    channelId: selectedChannel.chanId,
+                    directionPubKey: String(selectedChannel.peerPubkey || '').toLowerCase(),
+                    feeRatePpm: getFeeRatePpm(selectedChannel.peerPolicy)
+                }
+            ],
             missionControl,
         };
 
@@ -688,6 +703,8 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 node: nodeInfo,
                 channel: selectedChannel,
                 peers: peers.filter((p) => (p.pub_key || p.pubKey) === selectedChannel.peerPubkey),
+                forwardingHistory: rawTelemetry.forwardingHistory,
+                feePolicies: rawTelemetry.feePolicies,
                 missionControlCount: rawTelemetry.missionControl?.pairs?.length || 0
             }
         };
@@ -852,18 +869,15 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 nodeMetrics: { betweennessCentrality: {} },
             });
             setLastTelemetry(fullTelemetry);
-            const res = await postRecommend({
-                telemetry: fullTelemetry,
+
+            const res = await postFeeSuggestion({
+                propsPayload: propsSnapshot,
+                peerFeeContext: {
+                    networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
+                    networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
+                },
                 privacyMode: 'feature_only',
             });
-            const localResponse = {
-                ...res,
-                _localRecommendRequest: {
-                    telemetry: fullTelemetry,
-                    privacyMode: 'feature_only',
-                },
-            };
-
             const recommendation = extractFeeRecommendation(res, selectedChannelRef);
             if (!recommendation) {
                 throw new Error('Local analysis returned no fee recommendation for the selected channel.');
@@ -875,7 +889,7 @@ const ChannelsPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null })
                 outgoingInspector: buildOutgoingInspector({
                     mode: activeAnalysisMode,
                     propsPayload: propsSnapshot,
-                    standardResponse: localResponse,
+                    standardResponse: res,
                     networkInAvgPpm: peerFeeStats?.correctedAvg ?? null,
                     networkOutAvgPpm: peerOutFeeStats?.correctedAvg ?? null,
                 }),

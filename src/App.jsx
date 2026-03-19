@@ -20,6 +20,7 @@ import { getMockLightningSnapshot } from './connectors/mockLightningSnapshot';
 import GraphAnalysisPage from './pages/GraphAnalysisPage';
 import ChannelsPage from './pages/ChannelsPage';
 import RecommendationsPage from './pages/RecommendationsPage';
+import CyclesAnalysisPage from './pages/CyclesAnalysisPage';
 
 function App() {
   const mockLightningEnabled = String(import.meta.env.VITE_ENABLE_MOCK_LIGHTNING_UI || '').trim().toLowerCase() === 'true';
@@ -369,6 +370,10 @@ function App() {
                     path="/recommendations"
                     element={<RecommendationsPage lnc={null} darkMode={darkMode} mockSnapshot={mockSnapshot} />}
                   />
+                  <Route
+                    path="/cycles"
+                    element={<CyclesAnalysisPage lnc={null} darkMode={darkMode} />}
+                  />
                   <Route path="/graph" element={<Navigate to="/channels" replace />} />
                   <Route path="*" element={<Navigate to="/channels" replace />} />
                 </Routes>
@@ -458,7 +463,7 @@ function App() {
                 backdropFilter: 'blur(12px)',
               }}
             >
-              <AppHeader nodeInfo={null} nodeChannelsCount="—" peersCount="—" onShowPeers={() => {}} />
+              <AppHeader nodeInfo={null} nodeChannelsCount="—" peersCount="—" onShowPeers={() => { }} />
               <NavBar
                 darkMode={darkMode}
                 isLoggedIn={false}
@@ -486,6 +491,14 @@ function App() {
                   element={
                     <LoginGate isLoggedIn={false} darkMode={darkMode} onNavigateToConnect={() => setShowConnect(true)}>
                       <RecommendationsPage lnc={null} darkMode={darkMode} />
+                    </LoginGate>
+                  }
+                />
+                <Route
+                  path="/cycles"
+                  element={
+                    <LoginGate isLoggedIn={false} darkMode={darkMode} onNavigateToConnect={() => setShowConnect(true)}>
+                      <CyclesAnalysisPage lnc={null} darkMode={darkMode} />
                     </LoginGate>
                   }
                 />
@@ -546,6 +559,7 @@ function App() {
               <Route path="/graph" element={<GraphAnalysisPage lnc={lnc} darkMode={darkMode} />} />
               <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
               <Route path="/recommendations" element={<RecommendationsPage lnc={lnc} darkMode={darkMode} />} />
+              <Route path="/cycles" element={<CyclesAnalysisPage lnc={lnc} darkMode={darkMode} />} />
               <Route path="*" element={<Navigate to="/channels" replace />} />
             </Routes>
 
