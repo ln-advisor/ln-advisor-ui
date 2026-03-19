@@ -16,7 +16,8 @@
     "react-router-dom": "^7.13.1",
     "recharts": "^3.7.0",
     "tailwindcss": "^4.2.1",
-    "web-vitals": "5.1.0"
+    "web-vitals": "5.1.0",
+    "ws": "^8.19.0"
   },
   "scripts": {
     "dev": "vite",
@@ -36,6 +37,10 @@
     "test:frontend:telemetry": "tsx tests/test-frontend-telemetry.ts --mock",
     "test:privacy:modes": "tsx tests/test-privacy-modes.ts",
     "test:api:telemetry-flow": "tsx tests/test-api-telemetry-flow.ts",
+    "test:cr:analyzer": "tsx tests/test-conditional-recall-analyzer.ts",
+    "test:cr:api": "tsx tests/test-conditional-recall-api.ts",
+    "test:cr:mock-flow": "tsx tests/test-conditional-recall-mock-flow.ts",
+    "test:cr:all": "pnpm test:cr:analyzer && pnpm test:cr:api && pnpm test:cr:mock-flow",
     "test:e2e:api-curl": "bash tests/test-api-curl-e2e.sh",
     "test:phala:attestation-provider": "tsx tests/test-attestation-provider.ts",
     "test:phala:tee-simulated": "tsx tests/test-tee-simulated.ts",

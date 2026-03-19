@@ -40,6 +40,16 @@ import {
 import { applyRetentionPolicy, resolveRetentionMode, type RetentionMode, type RetentionSummary } from "./retention";
 import { createTrainingContributionReceipt, type TrainingContributionReceipt } from "./trainingContribution";
 import type { VerifyPhalaAttestationBySourceResult } from "../tee/phala";
+import {
+  createConditionalRecallSessionManager,
+} from "../cr/sessionManager";
+import { createMockConditionalRecallSessionManager } from "../cr/mockConditionalRecall";
+import type {
+  ConditionalRecallChannelHint,
+  ConditionalRecallConfig,
+  ConditionalRecallRouterConfig,
+  ConditionalRecallSessionManager,
+} from "../cr/types";
 
 type SnapshotMode = "lnc" | "mock" | "frontend_payload";
 
@@ -99,13 +109,14 @@ interface RecommendResponse {
 
 export interface ApiServerOptions {
   sourceVerificationRuntime?: ApiSourceVerificationRuntime;
+  conditionalRecallSessionManager?: ConditionalRecallSessionManager;
 }
 
 const DEFAULT_DEV_SIGNING_KEY = "arb-dev-signing-key-insecure";
 const API_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 const DEFAULT_RELEASED_SIGNER_ENCLAVE_PROVIDER = "verified_tee";
@@ -427,6 +438,82 @@ const ensureRelativeArtifactPath = (value: unknown): string => {
   return normalized;
 };
 
+const readStringField = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+const readNumberField = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseFloat(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+};
+
+const parseConditionalRecallRouterConfig = (value: unknown): ConditionalRecallRouterConfig => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Conditional Recall requires routerConfig.");
+  }
+  const typed = value as Record<string, unknown>;
+  const restHost = readStringField(typed.restHost);
+  const macaroonHex = readStringField(typed.macaroonHex);
+  if (!restHost) {
+    throw new Error("Conditional Recall requires routerConfig.restHost.");
+  }
+  if (!macaroonHex) {
+    throw new Error("Conditional Recall requires routerConfig.macaroonHex.");
+  }
+  return {
+    restHost,
+    macaroonHex,
+    allowSelfSigned: typed.allowSelfSigned === true,
+  };
+};
+
+const parseConditionalRecallChannelHints = (value: unknown): ConditionalRecallChannelHint[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((hint) => {
+      if (!hint || typeof hint !== "object" || Array.isArray(hint)) return null;
+      const typed = hint as Record<string, unknown>;
+      const channelId = readStringField(typed.channelId);
+      if (!channelId) return null;
+      const channelRef = readStringField(typed.channelRef) || "unmapped_channel_0000";
+      const currentFeePpmRaw = typed.currentFeePpm;
+      const currentFeePpm =
+        currentFeePpmRaw === null || currentFeePpmRaw === undefined || currentFeePpmRaw === ""
+          ? null
+          : readNumberField(currentFeePpmRaw, 0);
+      return {
+        channelId,
+        channelRef,
+        currentFeePpm,
+      };
+    })
+    .filter((hint): hint is ConditionalRecallChannelHint => Boolean(hint));
+};
+
+const parseConditionalRecallConfig = (body: Record<string, unknown>): ConditionalRecallConfig => ({
+  routerConfig: parseConditionalRecallRouterConfig(body.routerConfig),
+  lookbackDays: readNumberField(body.lookbackDays, 14),
+  liveWindowSeconds: readNumberField(body.liveWindowSeconds, 300),
+  channelHints: parseConditionalRecallChannelHints(body.channelHints),
+});
+
+const matchConditionalRecallSessionPath = (
+  pathname: string
+): { sessionId: string; isResultPath: boolean } | null => {
+  const resultMatch = pathname.match(/^\/api\/cr\/sessions\/([^/]+)\/result$/);
+  if (resultMatch) {
+    return { sessionId: decodeURIComponent(resultMatch[1]), isResultPath: true };
+  }
+  const statusMatch = pathname.match(/^\/api\/cr\/sessions\/([^/]+)$/);
+  if (statusMatch) {
+    return { sessionId: decodeURIComponent(statusMatch[1]), isResultPath: false };
+  }
+  return null;
+};
+
 const resolveSnapshot = async (
   mode: SnapshotMode,
   telemetry: FrontendTelemetryEnvelope | null
@@ -609,6 +696,14 @@ const buildRecommendationBundle = async (
 };
 
 export function createApiServer(options: ApiServerOptions = {}): http.Server {
+  const useMockConditionalRecall =
+    process.env.LIGHTNING_SNAPSHOT_MODE?.trim().toLowerCase() === "mock";
+  const conditionalRecallSessionManager =
+    options.conditionalRecallSessionManager ||
+    (useMockConditionalRecall
+      ? createMockConditionalRecallSessionManager()
+      : createConditionalRecallSessionManager());
+
   return http.createServer(async (req, res) => {
     try {
       if (req.method === "OPTIONS") {
@@ -617,15 +712,71 @@ export function createApiServer(options: ApiServerOptions = {}): http.Server {
         return;
       }
 
-      if (req.method !== "POST") {
-        sendJson(res, 405, { ok: false, error: "Only POST is supported." });
+      const url = new URL(req.url || "/", "http://localhost");
+      const crRoute = matchConditionalRecallSessionPath(url.pathname);
+
+      if (req.method === "GET" && crRoute) {
+        if (crRoute.isResultPath) {
+          const result = conditionalRecallSessionManager.getResult(crRoute.sessionId);
+          if (!result) {
+            const status = conditionalRecallSessionManager.getStatus(crRoute.sessionId);
+            if (!status) {
+              sendJson(res, 404, { ok: false, error: "Conditional Recall session not found." });
+              return;
+            }
+            sendJson(res, 409, {
+              ok: false,
+              error: `Conditional Recall session is not complete yet (${status.state}).`,
+              status,
+            });
+            return;
+          }
+          sendJson(res, 200, { ok: true, sessionId: crRoute.sessionId, result });
+          return;
+        }
+
+        const status = conditionalRecallSessionManager.getStatus(crRoute.sessionId);
+        if (!status) {
+          sendJson(res, 404, { ok: false, error: "Conditional Recall session not found." });
+          return;
+        }
+        sendJson(res, 200, { ok: true, status });
         return;
       }
 
-      const url = new URL(req.url || "/", "http://localhost");
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "Only GET, POST, and OPTIONS are supported." });
+        return;
+      }
+
       const body = await parseBody(req);
       const telemetry = readFrontendTelemetry(body.telemetry);
       const mode = telemetry ? "frontend_payload" : toSnapshotMode(body.mode);
+
+      if (url.pathname === "/api/cr/config/test") {
+        const routerConfig = parseConditionalRecallRouterConfig(body.routerConfig);
+        const response = await conditionalRecallSessionManager.testConfig(routerConfig);
+        sendJson(res, 200, response);
+        return;
+      }
+
+      if (url.pathname === "/api/cr/sessions") {
+        const config = parseConditionalRecallConfig(body);
+        const response = await conditionalRecallSessionManager.startSession(config);
+        sendJson(res, 200, response);
+        return;
+      }
+
+      if (url.pathname.match(/^\/api\/cr\/sessions\/[^/]+\/cancel$/)) {
+        const sessionId = decodeURIComponent(url.pathname.split("/")[4] || "");
+        const status = await conditionalRecallSessionManager.cancelSession(sessionId);
+        if (!status) {
+          sendJson(res, 404, { ok: false, error: "Conditional Recall session not found." });
+          return;
+        }
+        sendJson(res, 200, { ok: true, status });
+        return;
+      }
 
       if (url.pathname === "/api/snapshot") {
         const snapshotResponse = await buildSnapshotBundle(mode, telemetry);

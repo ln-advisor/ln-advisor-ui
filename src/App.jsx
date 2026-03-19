@@ -21,6 +21,7 @@ import GraphAnalysisPage from './pages/GraphAnalysisPage';
 import ChannelsPage from './pages/ChannelsPage';
 import RecommendationsPage from './pages/RecommendationsPage';
 import CyclesAnalysisPage from './pages/CyclesAnalysisPage';
+import ConditionalRecallPage from './pages/ConditionalRecallPage';
 
 function App() {
   const mockLightningEnabled = String(import.meta.env.VITE_ENABLE_MOCK_LIGHTNING_UI || '').trim().toLowerCase() === 'true';
@@ -374,6 +375,10 @@ function App() {
                     path="/cycles"
                     element={<CyclesAnalysisPage lnc={null} darkMode={darkMode} />}
                   />
+                  <Route
+                    path="/conditional-recall"
+                    element={<ConditionalRecallPage lnc={null} darkMode={darkMode} nodeChannels={mockChannels} mockSnapshot={mockSnapshot} />}
+                  />
                   <Route path="/graph" element={<Navigate to="/channels" replace />} />
                   <Route path="*" element={<Navigate to="/channels" replace />} />
                 </Routes>
@@ -502,6 +507,14 @@ function App() {
                     </LoginGate>
                   }
                 />
+                <Route
+                  path="/conditional-recall"
+                  element={
+                    <LoginGate isLoggedIn={false} darkMode={darkMode} onNavigateToConnect={() => setShowConnect(true)}>
+                      <ConditionalRecallPage lnc={null} darkMode={darkMode} nodeChannels={[]} />
+                    </LoginGate>
+                  }
+                />
                 <Route path="/" element={<Navigate to="/channels" replace />} />
                 <Route path="*" element={<Navigate to="/channels" replace />} />
               </Routes>
@@ -560,6 +573,7 @@ function App() {
               <Route path="/channels" element={<ChannelsPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
               <Route path="/recommendations" element={<RecommendationsPage lnc={lnc} darkMode={darkMode} />} />
               <Route path="/cycles" element={<CyclesAnalysisPage lnc={lnc} darkMode={darkMode} />} />
+              <Route path="/conditional-recall" element={<ConditionalRecallPage lnc={lnc} darkMode={darkMode} nodeChannels={nodeChannels} />} />
               <Route path="*" element={<Navigate to="/channels" replace />} />
             </Routes>
 

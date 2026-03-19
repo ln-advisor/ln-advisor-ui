@@ -50,6 +50,9 @@ importers:
       web-vitals:
         specifier: 5.1.0
         version: 5.1.0
+      ws:
+        specifier: ^8.19.0
+        version: 8.19.0
     devDependencies:
       '@vitejs/plugin-react':
         specifier: ^5.1.4

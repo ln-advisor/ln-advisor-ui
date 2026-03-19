@@ -1,4 +1,11 @@
 import type { FrontendTelemetryEnvelope } from "../connectors/types";
+import type {
+  ConditionalRecallChannelHint,
+  ConditionalRecallConfigTestResponse,
+  ConditionalRecallResult,
+  ConditionalRecallSessionStartResponse,
+  ConditionalRecallStatus,
+} from "../cr/types";
 
 export interface BuildFrontendTelemetryEnvelopeInput {
   collectedAt?: string;
@@ -33,7 +40,23 @@ export interface RecommendApiRequest {
   issuedAt?: string;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+const resolveApiBase = (): string => {
+  const configured = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (!configured) return "";
+
+  // In local development, prefer the Vite proxy so the browser does not need
+  // to reach the WSL API port directly.
+  if (
+    import.meta.env.DEV &&
+    /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(configured)
+  ) {
+    return "";
+  }
+
+  return configured;
+};
+
+const API_BASE = resolveApiBase();
 
 const parseJsonResponse = async (response: Response): Promise<any> => {
   const text = await response.text();
@@ -55,6 +78,18 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+  });
+  const payload = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error((payload && payload.error) || `API request failed for ${path}`);
+  }
+  return payload as T;
+};
+
+const getJson = async <T>(path: string): Promise<T> => {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
+    headers: { "content-type": "application/json" },
   });
   const payload = await parseJsonResponse(response);
   if (!response.ok) {
@@ -168,3 +203,53 @@ export const postFeeSuggestion = async <T = unknown>(
     privacyMode: request.privacyMode || "feature_only",
     ...(request.issuedAt ? { issuedAt: request.issuedAt } : {}),
   });
+
+export interface ConditionalRecallRouterConfigInput {
+  restHost: string;
+  macaroonHex: string;
+  allowSelfSigned: boolean;
+}
+
+export interface ConditionalRecallSessionRequest {
+  routerConfig: ConditionalRecallRouterConfigInput;
+  lookbackDays?: number;
+  liveWindowSeconds?: number;
+  channelHints: ConditionalRecallChannelHint[];
+}
+
+export const postConditionalRecallConfigTest = async (
+  routerConfig: ConditionalRecallRouterConfigInput
+): Promise<ConditionalRecallConfigTestResponse> =>
+  postJson<ConditionalRecallConfigTestResponse>("/api/cr/config/test", {
+    routerConfig,
+  });
+
+export const postConditionalRecallSessionStart = async (
+  request: ConditionalRecallSessionRequest
+): Promise<ConditionalRecallSessionStartResponse> =>
+  postJson<ConditionalRecallSessionStartResponse>("/api/cr/sessions", {
+    routerConfig: request.routerConfig,
+    lookbackDays: request.lookbackDays ?? 14,
+    liveWindowSeconds: request.liveWindowSeconds ?? 300,
+    channelHints: request.channelHints,
+  });
+
+export const getConditionalRecallSessionStatus = async (
+  sessionId: string
+): Promise<{ ok: true; status: ConditionalRecallStatus }> =>
+  getJson<{ ok: true; status: ConditionalRecallStatus }>(`/api/cr/sessions/${encodeURIComponent(sessionId)}`);
+
+export const getConditionalRecallSessionResult = async (
+  sessionId: string
+): Promise<{ ok: true; sessionId: string; result: ConditionalRecallResult }> =>
+  getJson<{ ok: true; sessionId: string; result: ConditionalRecallResult }>(
+    `/api/cr/sessions/${encodeURIComponent(sessionId)}/result`
+  );
+
+export const postConditionalRecallSessionCancel = async (
+  sessionId: string
+): Promise<{ ok: true; status: ConditionalRecallStatus }> =>
+  postJson<{ ok: true; status: ConditionalRecallStatus }>(
+    `/api/cr/sessions/${encodeURIComponent(sessionId)}/cancel`,
+    {}
+  );

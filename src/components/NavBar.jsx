@@ -72,6 +72,16 @@ const NavBar = ({ darkMode, isLoggedIn, onNavigateToConnect }) => {
         </svg>
       ), 'Cycles Analysis')}
 
+      {navLink('/conditional-recall', (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+          <path d="M8.5 8.5l7 7" />
+          <path d="M15.5 8.5l-7 7" />
+        </svg>
+      ), 'Conditional Recall')}
+
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 

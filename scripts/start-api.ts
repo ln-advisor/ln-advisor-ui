@@ -13,7 +13,15 @@ function main(): void {
   const port = parsePort();
   const server = startApiServer(port);
   console.log(`API server listening on http://127.0.0.1:${port}`);
-  console.log("Endpoints: POST /api/snapshot, POST /api/recommend, POST /api/verify");
+  console.log("Endpoints:");
+  console.log("- POST /api/snapshot");
+  console.log("- POST /api/recommend");
+  console.log("- POST /api/verify");
+  console.log("- POST /api/cr/config/test");
+  console.log("- POST /api/cr/sessions");
+  console.log("- GET /api/cr/sessions/:sessionId");
+  console.log("- GET /api/cr/sessions/:sessionId/result");
+  console.log("- POST /api/cr/sessions/:sessionId/cancel");
   console.log("Telemetry mode: send { telemetry: frontend-telemetry-envelope-v1 } to /api/snapshot and /api/recommend");
 
   const shutdown = (signal: NodeJS.Signals) => {
