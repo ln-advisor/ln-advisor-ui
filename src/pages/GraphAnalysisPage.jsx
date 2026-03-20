@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Buffer } from 'buffer';
 import {
     ResponsiveContainer,
@@ -154,7 +154,8 @@ const makeDownload = (filename, obj) => {
 
 
 
-const GraphAnalysisPage = ({ lnc, darkMode }) => {
+const GraphAnalysisPage = ({ lnc, darkMode, mockSnapshot = null }) => {
+    const isMockMode = !lnc?.lnd?.lightning && Boolean(mockSnapshot);
     const [graph, setGraph] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -187,7 +188,58 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
     const [geminiLoading, setGeminiLoading] = useState(false);
     const [lastTelemetry, setLastTelemetry] = useState(null);
 
+    const getMockGraphData = useCallback(() => ({
+        nodes: Array.isArray(mockSnapshot?.graphNodes) ? mockSnapshot.graphNodes : [],
+        edges: Array.isArray(mockSnapshot?.graphEdges) ? mockSnapshot.graphEdges : [],
+    }), [mockSnapshot]);
+
+    const getMockForwardingData = useCallback(() => (
+        Array.isArray(mockSnapshot?.forwardingHistory) ? mockSnapshot.forwardingHistory : []
+    ), [mockSnapshot]);
+
+    const getMockMissionControlData = useCallback(() => {
+        const pairs = Array.isArray(mockSnapshot?.missionControlPairs) ? mockSnapshot.missionControlPairs : [];
+        return {
+            pairs: pairs.map((pair) => ({
+                nodeFrom: pair.nodeFrom,
+                nodeTo: pair.nodeTo,
+                history: {
+                    success_time: toNum(pair.lastSuccessTimestamp),
+                    fail_time: toNum(pair.lastFailTimestamp),
+                    success_amt_sat: Math.max(50_000, toNum(pair.successCount) * 50_000),
+                    fail_amt_sat: Math.max(0, toNum(pair.failCount) * 25_000),
+                },
+            })),
+        };
+    }, [mockSnapshot]);
+
+    const getMockNodeMetricsData = useCallback(() => {
+        const entries = Array.isArray(mockSnapshot?.nodeCentralityMetrics) ? mockSnapshot.nodeCentralityMetrics : [];
+        return {
+            betweennessCentrality: entries.reduce((acc, row) => {
+                const pubkey = String(row?.nodePubkey || row?.node_pubkey || '').trim();
+                if (!pubkey) return acc;
+                acc[pubkey] = {
+                    value: toNum(row?.betweennessCentrality),
+                    normalizedValue: toNum(row?.betweennessCentrality),
+                };
+                return acc;
+            }, {}),
+        };
+    }, [mockSnapshot]);
+
+    const getMockNodeInfo = useCallback(() => mockSnapshot?.nodeInfo || null, [mockSnapshot]);
+    const getMockChannelsData = useCallback(() => (
+        Array.isArray(mockSnapshot?.channels) ? mockSnapshot.channels : []
+    ), [mockSnapshot]);
+    const getMockPeersData = useCallback(() => (
+        Array.isArray(mockSnapshot?.peers) ? mockSnapshot.peers : []
+    ), [mockSnapshot]);
+
     const fetchGraphData = useCallback(async () => {
+        if (isMockMode) {
+            return getMockGraphData();
+        }
         if (!lnc?.lnd?.lightning) {
             setError('Lightning service not available on this LNC session.');
             return null;
@@ -207,9 +259,12 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             setError(e?.message || 'Failed to load graph.');
         }
         return null;
-    }, [lnc, includeUnannounced, includeAuthProof]);
+    }, [lnc, includeUnannounced, includeAuthProof, isMockMode, getMockGraphData]);
 
     const fetchForwardingData = useCallback(async () => {
+        if (isMockMode) {
+            return getMockForwardingData();
+        }
         if (!lnc?.lnd?.lightning) {
             setForwardingError('Lightning service not available on this LNC session.');
             return null;
@@ -235,9 +290,12 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             setForwardingError(e?.message || 'Failed to load forwarding history.');
             return null;
         }
-    }, [lnc, rangeDays]);
+    }, [lnc, rangeDays, isMockMode, getMockForwardingData]);
 
     const fetchMissionControlData = useCallback(async () => {
+        if (isMockMode) {
+            return getMockMissionControlData();
+        }
         if (!lnc?.lnd?.router) {
             setMissionError('Router service not available on this LNC session.');
             return null;
@@ -254,9 +312,12 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             setMissionError(e?.message || 'Failed to load mission control data.');
             return null;
         }
-    }, [lnc]);
+    }, [lnc, isMockMode, getMockMissionControlData]);
 
     const fetchNodeMetricsData = useCallback(async () => {
+        if (isMockMode) {
+            return getMockNodeMetricsData();
+        }
         if (!lnc?.lnd?.lightning) {
             setNodeMetricsError('Lightning service not available on this LNC session.');
             return null;
@@ -273,9 +334,10 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             setNodeMetricsError(e?.message || 'Failed to load node metrics.');
             return null;
         }
-    }, [lnc]);
+    }, [lnc, isMockMode, getMockNodeMetricsData]);
 
     const fetchNodeInfo = useCallback(async () => {
+        if (isMockMode) return getMockNodeInfo();
         if (!lnc?.lnd?.lightning?.getInfo) return null;
         try {
             const info = await lnc.lnd.lightning.getInfo({});
@@ -284,9 +346,10 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             console.error('getInfo failed:', e);
             return null;
         }
-    }, [lnc]);
+    }, [lnc, isMockMode, getMockNodeInfo]);
 
     const fetchChannelsData = useCallback(async () => {
+        if (isMockMode) return getMockChannelsData();
         if (!lnc?.lnd?.lightning?.listChannels) return [];
         try {
             const response = await lnc.lnd.lightning.listChannels({});
@@ -295,9 +358,10 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             console.error('listChannels failed:', e);
             return [];
         }
-    }, [lnc]);
+    }, [lnc, isMockMode, getMockChannelsData]);
 
     const fetchPeersData = useCallback(async () => {
+        if (isMockMode) return getMockPeersData();
         if (!lnc?.lnd?.lightning?.listPeers) return [];
         try {
             const response = await lnc.lnd.lightning.listPeers({});
@@ -306,7 +370,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
             console.error('listPeers failed:', e);
             return [];
         }
-    }, [lnc]);
+    }, [lnc, isMockMode, getMockPeersData]);
 
     const fetchData = useCallback(async () => {
         setIsLoading(true);
@@ -351,6 +415,11 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
         fetchChannelsData,
         fetchPeersData,
     ]);
+
+    useEffect(() => {
+        if (!isMockMode) return;
+        fetchData();
+    }, [isMockMode, fetchData]);
 
     const normalized = useMemo(() => {
         const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
@@ -876,9 +945,9 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                         />
                     </div>
                     <p className="text-sm mt-2 max-w-xl" style={{ color: 'var(--text-secondary)' }}>
-                        Live read-only analysis of your node’s network position, forwarding performance,
-                        and routing intelligence. Data is fetched directly from your node via LNC —
-                        no external API calls are made from this page.
+                        {isMockMode
+                            ? 'Mock node analysis with graph, forwarding, mission control, and centrality data loaded from the local mock snapshot.'
+                            : 'Live read-only analysis of your node’s network position, forwarding performance, and routing intelligence. Data is fetched directly from your node via LNC — no external API calls are made from this page.'}
                     </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -899,7 +968,7 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                             transition: 'opacity 0.2s',
                         }}
                     >
-                        {isLoading ? 'Loading…' : 'Fetch Data'}
+                        {isLoading ? 'Loading…' : (isMockMode ? 'Reload Mock Data' : 'Fetch Data')}
                     </button>
                     {isLoading && <InlineSpinner label="Fetching graph + signals…" />}
                     {!isLoading && graph && (
@@ -928,7 +997,11 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
                     <div className="text-xs uppercase tracking-widest font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
                         Ready When You Are
                     </div>
-                    <p>Click <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Fetch Data</span> to load the Lightning network snapshot and forwarding history from your node.</p>
+                    <p>
+                        {isMockMode
+                            ? <>Click <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Reload Mock Data</span> to load the local mock graph and forwarding data.</>
+                            : <>Click <span className="font-semibold" style={{ color: 'var(--accent-2)' }}>Fetch Data</span> to load the Lightning network snapshot and forwarding history from your node.</>}
+                    </p>
                 </div>
             )}
 
@@ -1722,4 +1795,3 @@ const GraphAnalysisPage = ({ lnc, darkMode }) => {
 };
 
 export default GraphAnalysisPage;
-

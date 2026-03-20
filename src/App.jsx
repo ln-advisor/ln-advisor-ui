@@ -379,7 +379,10 @@ function App() {
                     path="/conditional-recall"
                     element={<ConditionalRecallPage lnc={null} darkMode={darkMode} nodeChannels={mockChannels} mockSnapshot={mockSnapshot} />}
                   />
-                  <Route path="/graph" element={<Navigate to="/channels" replace />} />
+                  <Route
+                    path="/graph"
+                    element={<GraphAnalysisPage lnc={null} darkMode={darkMode} mockSnapshot={mockSnapshot} />}
+                  />
                   <Route path="*" element={<Navigate to="/channels" replace />} />
                 </Routes>
 
