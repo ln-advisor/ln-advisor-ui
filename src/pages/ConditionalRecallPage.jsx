@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   getConditionalRecallSessionResult,
   getConditionalRecallSessionStatus,
@@ -68,6 +68,36 @@ const loadInitialFormState = () => {
 
 const fmtNum = (value) => Number(value || 0).toLocaleString();
 const fmtPct = (value) => `${Math.round(Number(value || 0) * 100)}%`;
+const fmtDateTime = (value) => {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString();
+};
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const sessionStageOrder = [
+  'idle',
+  'testing_config',
+  'starting',
+  'collecting_history',
+  'streaming_live',
+  'analyzing',
+  'completed',
+];
+
+const actionPalette = {
+  raise: {
+    bg: 'rgba(250,204,21,0.18)',
+    color: 'var(--accent-3)',
+    border: 'rgba(250,204,21,0.38)',
+  },
+  lower: {
+    bg: 'rgba(59,130,246,0.14)',
+    color: 'var(--accent-2)',
+    border: 'rgba(59,130,246,0.3)',
+  },
+};
 
 const StatusPill = ({ state }) => {
   const palette = {
@@ -131,6 +161,28 @@ const ExplainerTile = ({ title, body }) => (
   </div>
 );
 
+const ResultSummaryCard = ({ label, value, detail, background = 'rgba(59,130,246,0.08)' }) => (
+  <div
+    className="rounded-2xl border p-4"
+    style={{
+      borderColor: 'var(--border-color)',
+      background: `linear-gradient(180deg, ${background}, var(--bg-card-2))`,
+    }}
+  >
+    <p className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>
+      {label}
+    </p>
+    <p className="mt-2 text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+      {value}
+    </p>
+    {detail ? (
+      <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+        {detail}
+      </p>
+    ) : null}
+  </div>
+);
+
 const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot = null }) => {
   const isMockMode = !lnc?.lnd?.lightning && Boolean(mockSnapshot);
   const [formState, setFormState] = useState(loadInitialFormState);
@@ -143,7 +195,9 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [sessionStatus, setSessionStatus] = useState(null);
   const [sessionResult, setSessionResult] = useState(null);
+  const [isFetchingResult, setIsFetchingResult] = useState(false);
   const [pageError, setPageError] = useState(null);
+  const resultsRef = useRef(null);
 
   useEffect(() => {
     const persisted = {
@@ -284,6 +338,25 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
     sessionStatus &&
     !['completed', 'failed', 'canceled'].includes(sessionStatus.state);
 
+  const currentStageIndex = sessionStageOrder.indexOf(sessionStatus?.state || 'idle');
+  const normalizedStageIndex = currentStageIndex === -1 ? 0 : currentStageIndex;
+  const sessionProgressPercent = clamp(
+    (normalizedStageIndex / (sessionStageOrder.length - 1)) * 100,
+    0,
+    100
+  );
+  const sessionNarrative = {
+    idle: 'Ready to start a bounded collection run.',
+    testing_config: 'Checking forwarding history and HTLC stream access.',
+    starting: 'Preparing the session and channel hint map.',
+    collecting_history: 'Loading the forwarding baseline for the selected lookback window.',
+    streaming_live: 'Watching live HTLC traffic and updating channel pressure in real time.',
+    analyzing: 'Reducing the collected signal into aggregate channel scores.',
+    completed: 'Collection finished and the draft review is ready.',
+    failed: 'The session stopped before a result could be produced.',
+    canceled: 'The session was canceled and the in-memory collection was cleared.',
+  }[sessionStatus?.state || 'idle'];
+
   useEffect(() => {
     if (!activeSessionId || !sessionStatus || ['completed', 'failed', 'canceled'].includes(sessionStatus.state)) {
       return undefined;
@@ -302,17 +375,6 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
         setSessionStatus(response.status);
         conditionalRecallDebugLog('status response', response.status);
 
-        if (response.status.state === 'completed') {
-          const resultResponse = await getConditionalRecallSessionResult(activeSessionId);
-          if (!cancelled) {
-            setSessionResult(resultResponse.result);
-            conditionalRecallDebugLog('result response', {
-              sessionId: activeSessionId,
-              aggregateChannels: resultResponse.result?.aggregate?.channels?.length || 0,
-              suggestionCount: resultResponse.result?.suggestions?.length || 0,
-            });
-          }
-        }
       } catch (error) {
         if (!cancelled) {
           conditionalRecallDebugLog('poll failed', error instanceof Error ? { message: error.message, stack: error.stack } : error);
@@ -331,6 +393,48 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
       window.clearInterval(interval);
     };
   }, [activeSessionId, sessionStatus]);
+
+  useEffect(() => {
+    if (!activeSessionId || sessionStatus?.state !== 'completed' || sessionResult) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    setIsFetchingResult(true);
+
+    const loadResult = async () => {
+      try {
+        const resultResponse = await getConditionalRecallSessionResult(activeSessionId);
+        if (cancelled) return;
+        setSessionResult(resultResponse.result);
+        setPageError(null);
+        conditionalRecallDebugLog('result response', {
+          sessionId: activeSessionId,
+          aggregateChannels: resultResponse.result?.aggregate?.channels?.length || 0,
+          suggestionCount: resultResponse.result?.suggestions?.length || 0,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          conditionalRecallDebugLog('result fetch failed', error instanceof Error ? { message: error.message, stack: error.stack } : error);
+          setPageError(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setIsFetchingResult(false);
+        }
+      }
+    };
+
+    void loadResult();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, sessionResult, sessionStatus?.state]);
+
+  useEffect(() => {
+    if (!sessionResult || !resultsRef.current) return;
+    resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [sessionResult]);
 
   const handleFormChange = (field, value) => {
     setFormState((current) => ({
@@ -369,6 +473,7 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
     setIsStarting(true);
     setPageError(null);
     setSessionResult(null);
+    setIsFetchingResult(false);
     setConfigTestError(null);
     conditionalRecallDebugLog('session start requested', {
       restHost: isMockMode ? (formState.restHost || MOCK_REST_HOST) : formState.restHost,
@@ -433,6 +538,7 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
     setActiveSessionId(null);
     setSessionStatus(null);
     setSessionResult(null);
+    setIsFetchingResult(false);
     setPageError(null);
     setFormState((current) => ({
       ...current,
@@ -445,6 +551,11 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
     readText(isMockMode ? (formState.macaroonHex || MOCK_MACAROON) : formState.macaroonHex).length > 0 &&
     channelHints.length > 0 &&
     !hasActiveSession;
+
+  const resultSuggestions = Array.isArray(sessionResult?.suggestions) ? sessionResult.suggestions : [];
+  const aggregateChannels = Array.isArray(sessionResult?.aggregate?.channels) ? sessionResult.aggregate.channels : [];
+  const topSuggestion = resultSuggestions[0] || null;
+  const resultReady = Boolean(sessionResult);
 
   return (
     <div className="space-y-6 px-6 py-8">
@@ -671,6 +782,58 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
         title="Session Status"
         subtitle="Bounded session lifecycle. Raw event context is held in memory during collection only."
       >
+        <div className="rounded-2xl border p-5" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)' }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>
+                Live Run Progress
+              </p>
+              <p className="mt-2 text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {sessionNarrative}
+              </p>
+            </div>
+            <div
+              className="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]"
+              style={{
+                backgroundColor: sessionResult ? 'var(--success-bg)' : 'rgba(59,130,246,0.12)',
+                color: sessionResult ? 'var(--success-text)' : 'var(--accent-2)',
+              }}
+            >
+              {sessionResult ? 'Results ready' : isFetchingResult ? 'Finalizing results' : `${Math.round(sessionProgressPercent)}% lifecycle`}
+            </div>
+          </div>
+          <div className="mt-4 h-2 overflow-hidden rounded-full" style={{ backgroundColor: 'rgba(148,163,184,0.16)' }}>
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${sessionResult ? 100 : sessionProgressPercent}%`,
+                background: sessionResult
+                  ? 'linear-gradient(90deg, var(--accent-1), var(--success-text))'
+                  : 'linear-gradient(90deg, var(--accent-1), var(--accent-2))',
+              }}
+            />
+          </div>
+          <div className="mt-4 grid gap-2 text-xs md:grid-cols-4" style={{ color: 'var(--text-secondary)' }}>
+            {['Starting', 'History', 'Live stream', 'Review ready'].map((label, index) => {
+              const threshold = (index / 3) * 100;
+              const isComplete = (sessionResult ? 100 : sessionProgressPercent) >= threshold;
+              return (
+                <div
+                  key={label}
+                  className="rounded-xl border px-3 py-2"
+                  style={{
+                    borderColor: isComplete ? 'rgba(59,130,246,0.3)' : 'var(--border-color)',
+                    backgroundColor: isComplete ? 'rgba(59,130,246,0.08)' : 'var(--bg-card)',
+                    color: isComplete ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  }}
+                >
+                  {label}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-4">
           <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)' }}>
             <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>Session</p>
@@ -702,11 +865,11 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
             <div className="grid gap-3 md:grid-cols-2">
               <div>
                 <p style={{ color: 'var(--text-secondary)' }}>Started</p>
-                <p className="mt-1 font-medium" style={{ color: 'var(--text-primary)' }}>{sessionStatus.startedAt}</p>
+                <p className="mt-1 font-medium" style={{ color: 'var(--text-primary)' }}>{fmtDateTime(sessionStatus.startedAt)}</p>
               </div>
               <div>
                 <p style={{ color: 'var(--text-secondary)' }}>Ends</p>
-                <p className="mt-1 font-medium" style={{ color: 'var(--text-primary)' }}>{sessionStatus.endsAt || 'Pending'}</p>
+                <p className="mt-1 font-medium" style={{ color: 'var(--text-primary)' }}>{fmtDateTime(sessionStatus.endsAt)}</p>
               </div>
             </div>
             {sessionStatus.error ? (
@@ -722,12 +885,84 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
         title="Draft Fee Suggestions"
         subtitle="Deterministic local rules only for this first slice."
       >
-        {!sessionResult ? (
-          <div className="rounded-xl border px-4 py-6 text-sm" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)', color: 'var(--text-secondary)' }}>
-            Start a Conditional Recall session to collect a forwarding baseline, watch the HTLC stream, and emit aggregate fee suggestions.
+        {!resultReady ? (
+          <div
+            className="rounded-2xl border px-5 py-6 text-sm"
+            style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)', color: 'var(--text-secondary)' }}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                  {isFetchingResult
+                    ? 'Finalizing your draft fee review'
+                    : hasActiveSession
+                      ? 'Session is running'
+                      : 'No session result yet'}
+                </p>
+                <p className="mt-2 leading-6">
+                  {isFetchingResult
+                    ? 'The collection window has closed. The page is fetching the aggregate-only output and will reveal the review automatically.'
+                    : hasActiveSession
+                      ? 'Live counts are updating above while the collector watches HTLC traffic. Results will appear here as soon as the session completes.'
+                      : 'Start a Conditional Recall session to collect a forwarding baseline, watch the HTLC stream, and emit aggregate fee suggestions.'}
+                </p>
+              </div>
+              <div
+                className="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]"
+                style={{
+                  backgroundColor: isFetchingResult ? 'rgba(59,130,246,0.12)' : 'rgba(148,163,184,0.14)',
+                  color: isFetchingResult ? 'var(--accent-2)' : 'var(--text-secondary)',
+                }}
+              >
+                {isFetchingResult ? 'Fetching result' : hasActiveSession ? 'Collecting' : 'Waiting'}
+              </div>
+            </div>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-4" ref={resultsRef}>
+            <div
+              className="rounded-2xl border p-5"
+              style={{
+                borderColor: 'rgba(34,197,94,0.24)',
+                background: 'linear-gradient(135deg, rgba(34,197,94,0.12), rgba(59,130,246,0.08))',
+              }}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--success-text)' }}>
+                    Review Ready
+                  </p>
+                  <h3 className="mt-2 text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    {resultSuggestions.length > 0
+                      ? `${fmtNum(resultSuggestions.length)} channels need a closer fee review`
+                      : 'No fee changes were triggered in this collection window'}
+                  </h3>
+                  <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+                    Completed at {fmtDateTime(sessionResult.collectionSummary?.completedAt)} across {fmtNum(aggregateChannels.length)} tracked channels.
+                  </p>
+                </div>
+                {topSuggestion ? (
+                  <div
+                    className="rounded-2xl border px-4 py-3 text-sm"
+                    style={{
+                      borderColor: actionPalette[topSuggestion.action]?.border || 'var(--border-color)',
+                      backgroundColor: actionPalette[topSuggestion.action]?.bg || 'var(--bg-card)',
+                    }}
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>
+                      Top Suggestion
+                    </p>
+                    <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                      {topSuggestion.channelRef} · {channelRefDetails[topSuggestion.channelRef]?.label || 'Unknown peer'}
+                    </p>
+                    <p className="mt-1" style={{ color: actionPalette[topSuggestion.action]?.color || 'var(--text-primary)' }}>
+                      {topSuggestion.action === 'raise' ? 'Raise' : 'Lower'} to {fmtNum(topSuggestion.suggestedFeePpm)} ppm
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
             <div className="grid gap-4 lg:grid-cols-3">
               <ExplainerTile
                 title="How Suggestions Are Made"
@@ -743,24 +978,24 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
               />
             </div>
             <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)' }}>
-                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>Suggestions</p>
-                <p className="mt-2 text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-                  {fmtNum(sessionResult.suggestions.length)}
-                </p>
-              </div>
-              <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)' }}>
-                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>Aggregate channels</p>
-                <p className="mt-2 text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-                  {fmtNum(sessionResult.aggregate.channels.length)}
-                </p>
-              </div>
-              <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card-2)' }}>
-                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-secondary)' }}>Collection window</p>
-                <p className="mt-2 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-                  {sessionResult.collectionSummary.windowStart || '—'}<br />{sessionResult.collectionSummary.windowEnd || '—'}
-                </p>
-              </div>
+              <ResultSummaryCard
+                label="Suggestions"
+                value={fmtNum(resultSuggestions.length)}
+                detail={topSuggestion ? `${topSuggestion.action} fee action surfaced first` : 'No channel crossed the deterministic thresholds'}
+                background="rgba(59,130,246,0.08)"
+              />
+              <ResultSummaryCard
+                label="Aggregate Channels"
+                value={fmtNum(aggregateChannels.length)}
+                detail={`${fmtNum(sessionResult.collectionSummary?.historyEventsProcessed || 0)} history events and ${fmtNum(sessionResult.collectionSummary?.liveEventsProcessed || 0)} live events analyzed`}
+                background="rgba(14,165,233,0.08)"
+              />
+              <ResultSummaryCard
+                label="Collection Window"
+                value={fmtDateTime(sessionResult.collectionSummary?.windowEnd)}
+                detail={`${fmtDateTime(sessionResult.collectionSummary?.windowStart)} to ${fmtDateTime(sessionResult.collectionSummary?.windowEnd)}`}
+                background="rgba(34,197,94,0.08)"
+              />
             </div>
 
             <div
@@ -801,23 +1036,33 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
                   </tr>
                 </thead>
                 <tbody>
-                  {sessionResult.suggestions.length === 0 ? (
+                  {resultSuggestions.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-4 py-6" style={{ color: 'var(--text-secondary)' }}>
                         No draft fee adjustments met the v1 deterministic thresholds.
                       </td>
                     </tr>
                   ) : (
-                    sessionResult.suggestions.map((suggestion) => {
+                    resultSuggestions.map((suggestion) => {
                       const details = channelRefDetails[suggestion.channelRef];
+                      const actionColors = actionPalette[suggestion.action] || actionPalette.lower;
                       return (
                         <tr key={suggestion.channelRef} style={{ borderTop: '1px solid var(--border-color)' }}>
                           <td className="px-4 py-3">
                             <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>{suggestion.channelRef}</div>
                             <div style={{ color: 'var(--text-secondary)' }}>{details?.label || 'Unknown peer'}</div>
                           </td>
-                          <td className="px-4 py-3" style={{ color: suggestion.action === 'raise' ? 'var(--accent-3)' : 'var(--accent-1)' }}>
-                            {suggestion.action}
+                          <td className="px-4 py-3">
+                            <span
+                              className="rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em]"
+                              style={{
+                                backgroundColor: actionColors.bg,
+                                color: actionColors.color,
+                                border: `1px solid ${actionColors.border}`,
+                              }}
+                            >
+                              {suggestion.action}
+                            </span>
                           </td>
                           <td className="px-4 py-3" style={{ color: 'var(--text-primary)' }}>{fmtNum(suggestion.currentFeePpm || 0)} ppm</td>
                           <td className="px-4 py-3" style={{ color: 'var(--text-primary)' }}>{fmtNum(suggestion.suggestedFeePpm)} ppm</td>
@@ -848,7 +1093,7 @@ const ConditionalRecallPage = ({ lnc, darkMode, nodeChannels = [], mockSnapshot 
                   </tr>
                 </thead>
                 <tbody>
-                  {sessionResult.aggregate.channels.map((channel) => {
+                  {aggregateChannels.map((channel) => {
                     const details = channelRefDetails[channel.channelRef];
                     return (
                       <tr key={channel.channelRef} style={{ borderTop: '1px solid var(--border-color)' }}>
