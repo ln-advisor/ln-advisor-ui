@@ -25,3 +25,8 @@
    - payload review
    - request inspector
    - verification panel fields
+
+5. [source-collection-receipts.md](./source-collection-receipts.md)
+   - next source-proof layer
+   - staged rollout for verified source mode
+   - receipt schema and provenance binding

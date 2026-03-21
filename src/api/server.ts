@@ -54,9 +54,9 @@ import type {
 
 type SnapshotMode = "lnc" | "mock" | "frontend_payload";
 
-// Builds a minimal but structurally valid SourceProvenanceReceipt for PROPS-only
-// routes where we never see raw telemetry. We hash the already-privacy-filtered
-// payload and use that as privacyTransformedSnapshotHash, which is all buildArb needs.
+// Builds a minimal fallback SourceProvenanceReceipt for PROPS-only routes where
+// we never see raw telemetry. This remains the local-only placeholder path
+// until source-collection-receipt-v1 is wired into verified source mode.
 const buildPropsProvenance = (propsPayload: unknown, collectedAt: string): SourceProvenanceReceipt => {
   const canonical = JSON.stringify(propsPayload);
   const payloadHash = createHash("sha256").update(canonical).digest("hex");
@@ -74,6 +74,12 @@ const buildPropsProvenance = (propsPayload: unknown, collectedAt: string): Sourc
       executionMode: "host_local",
       enclaveProviderId: null,
       attestationHash: null,
+      modelManifestHash: null,
+      modelPinningMode: null,
+      sourceVerificationSource: null,
+      sourceVerificationHash: null,
+      sourceCollectionReceiptType: null,
+      sourceCollectionReceiptHash: null,
     },
   };
 };

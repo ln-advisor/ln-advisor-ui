@@ -14,6 +14,8 @@ export interface SourceExecutionContext {
   modelPinningMode: string | null;
   sourceVerificationSource: string | null;
   sourceVerificationHash: string | null;
+  sourceCollectionReceiptType: string | null;
+  sourceCollectionReceiptHash: string | null;
 }
 
 export interface SourceProvenanceReceipt {
@@ -110,6 +112,8 @@ export function generateSourceProvenanceReceipt(
       sourceVerificationHash: options?.sourceVerificationResult
         ? hashCanonicalJson(options.sourceVerificationResult)
         : null,
+      sourceCollectionReceiptType: null,
+      sourceCollectionReceiptHash: null,
     },
   };
 }

@@ -65,6 +65,7 @@
     "test:verify:trust-aware": "tsx tests/test-trust-aware-verify.ts",
     "test:ui:channels-real-api": "tsx tests/test-channels-page-real-api.ts",
     "test:retention-policy": "tsx tests/test-retention-policy.ts",
+    "test:source-collection-receipt": "tsx tests/test-source-collection-receipt.ts",
     "test:training-contribution": "tsx tests/test-training-contribution.ts",
     "test:cohort-features": "tsx tests/test-cohort-features.ts",
     "test:model:private-pinning": "tsx tests/test-private-model-pinning.ts",
